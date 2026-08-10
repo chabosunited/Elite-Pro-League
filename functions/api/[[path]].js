@@ -13,9 +13,18 @@ export async function onRequest(context){
   const route = url.pathname.replace(/^\/api\/?/, '');
   const method = request.method.toUpperCase();
   try {
-    if(route === 'config' && method === 'GET') return json({turnstileSiteKey:env.TURNSTILE_SITE_KEY||'',paymentsEnabled:String(env.PAYMENTS_ENABLED||'false')==='true'});
-    if(route === 'auth/register' && method === 'POST') return register(request,env);
-    if(route === 'auth/login' && method === 'POST') return login(request,env);
+    if(route === 'config' && method === 'GET') return json({
+      paymentsEnabled:String(env.PAYMENTS_ENABLED||'false')==='true',
+      oauthGoogleEnabled:!!(env.GOOGLE_CLIENT_ID&&env.GOOGLE_CLIENT_SECRET),
+      oauthDiscordEnabled:!!(env.DISCORD_CLIENT_ID&&env.DISCORD_CLIENT_SECRET)
+    });
+    if(route === 'auth/register' && method === 'POST') return fail('Passwort-Registrierung wurde deaktiviert. Bitte Google oder Discord verwenden.',410);
+    if(route === 'auth/login' && method === 'POST') return fail('Passwort-Login wurde deaktiviert. Bitte Google oder Discord verwenden.',410);
+    if(route === 'auth/oauth/google/start' && method === 'GET') return oauthStart('google',request,env);
+    if(route === 'auth/oauth/google/callback' && method === 'GET') return oauthCallback('google',request,env);
+    if(route === 'auth/oauth/discord/start' && method === 'GET') return oauthStart('discord',request,env);
+    if(route === 'auth/oauth/discord/callback' && method === 'GET') return oauthCallback('discord',request,env);
+    if(route === 'profile/setup' && method === 'POST') return setupProfile(request,env);
     if(route === 'auth/logout' && method === 'POST') return logout(request,env);
     if(route === 'auth/me' && method === 'GET') return me(request,env);
     if(route === 'social/follow' && method === 'POST') return follow(request,env);
@@ -59,97 +68,127 @@ function secureCookie(value,maxAge){return `epl_session=${encodeURIComponent(val
 function slugify(s){return String(s).normalize('NFKD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'').slice(0,50)}
 function cleanText(s,max=500){return String(s||'').trim().slice(0,max)}
 
-async function hashPassword(password, salt=randomId(16)){
-  const key=await crypto.subtle.importKey('raw',enc.encode(password),'PBKDF2',false,['deriveBits']);
-  const bits=await crypto.subtle.deriveBits({name:'PBKDF2',hash:'SHA-256',salt:fromB64url(salt),iterations:210000},key,256);
-  return `pbkdf2_sha256$210000$${salt}$${b64url(new Uint8Array(bits))}`;
+function siteOrigin(request,env){
+  const configured=String(env.PUBLIC_SITE_URL||'').trim();
+  if(configured){try{return new URL(configured).origin}catch{}}
+  return new URL(request.url).origin;
 }
-async function verifyPassword(password, stored){
-  const [algo,it,salt,expected]=String(stored).split('$'); if(algo!=='pbkdf2_sha256')return false;
-  const key=await crypto.subtle.importKey('raw',enc.encode(password),'PBKDF2',false,['deriveBits']);
-  const bits=await crypto.subtle.deriveBits({name:'PBKDF2',hash:'SHA-256',salt:fromB64url(salt),iterations:Number(it)},key,256);
-  const got=b64url(new Uint8Array(bits)); if(got.length!==expected.length)return false; let diff=0;for(let i=0;i<got.length;i++)diff|=got.charCodeAt(i)^expected.charCodeAt(i);return diff===0;
+function oauthCookie(value,maxAge=600){return `epl_oauth=${encodeURIComponent(value)}; Path=/api/auth/oauth/; HttpOnly; Secure; SameSite=Lax; Max-Age=${maxAge}`}
+function clearOauthCookie(){return 'epl_oauth=; Path=/api/auth/oauth/; HttpOnly; Secure; SameSite=Lax; Max-Age=0'}
+function redirectResponse(location,cookies=[]){
+  const headers=new Headers({location,'cache-control':'no-store'});
+  for(const cookie of cookies)headers.append('set-cookie',cookie);
+  return new Response(null,{status:302,headers});
 }
-async function verifyTurnstile(request,env,token){
-  const secret=String(env.TURNSTILE_SECRET||'').trim();
-  const responseToken=String(token||'').trim();
-  if(!secret)return {success:false,'error-codes':['missing-input-secret']};
-  if(!responseToken)return {success:false,'error-codes':['missing-input-response']};
-
-  const payload={
-    secret,
-    response:responseToken,
-    idempotency_key:crypto.randomUUID()
+function oauthFailure(request,env,message){
+  const target=new URL('/login',siteOrigin(request,env));
+  target.searchParams.set('oauth_error',cleanText(message,180));
+  return redirectResponse(target.toString(),[clearOauthCookie()]);
+}
+function oauthConfig(provider,request,env){
+  const origin=siteOrigin(request,env);
+  if(provider==='google')return {
+    clientId:String(env.GOOGLE_CLIENT_ID||'').trim(),clientSecret:String(env.GOOGLE_CLIENT_SECRET||'').trim(),
+    authorizeUrl:'https://accounts.google.com/o/oauth2/v2/auth',tokenUrl:'https://oauth2.googleapis.com/token',
+    userUrl:'https://openidconnect.googleapis.com/v1/userinfo',scope:'openid email profile',redirectUri:`${origin}/api/auth/oauth/google/callback`
   };
-  const ip=request.headers.get('CF-Connecting-IP');
-  if(ip)payload.remoteip=ip;
+  if(provider==='discord')return {
+    clientId:String(env.DISCORD_CLIENT_ID||'').trim(),clientSecret:String(env.DISCORD_CLIENT_SECRET||'').trim(),
+    authorizeUrl:'https://discord.com/oauth2/authorize',tokenUrl:'https://discord.com/api/oauth2/token',
+    userUrl:'https://discord.com/api/v10/users/@me',scope:'identify email',redirectUri:`${origin}/api/auth/oauth/discord/callback`
+  };
+  throw httpError('Unbekannter OAuth-Anbieter.',400);
+}
+async function oauthStart(provider,request,env){
+  const cfg=oauthConfig(provider,request,env);
+  if(!cfg.clientId||!cfg.clientSecret)return oauthFailure(request,env,`${provider==='google'?'Google':'Discord'} Login ist noch nicht eingerichtet.`);
+  const state=randomId(24),auth=new URL(cfg.authorizeUrl);
+  auth.searchParams.set('client_id',cfg.clientId);auth.searchParams.set('redirect_uri',cfg.redirectUri);auth.searchParams.set('response_type','code');auth.searchParams.set('scope',cfg.scope);auth.searchParams.set('state',state);
+  if(provider==='google')auth.searchParams.set('prompt','select_account');
+  return redirectResponse(auth.toString(),[oauthCookie(`${provider}|${state}`)]);
+}
+async function oauthCallback(provider,request,env){
+  const db=requireDb(env),url=new URL(request.url),cfg=oauthConfig(provider,request,env);
+  const returnedState=url.searchParams.get('state')||'',code=url.searchParams.get('code')||'',providerError=url.searchParams.get('error');
+  const saved=String(cookieMap(request).epl_oauth||''),split=saved.indexOf('|'),savedProvider=split>=0?saved.slice(0,split):'',savedState=split>=0?saved.slice(split+1):'';
+  if(providerError)return oauthFailure(request,env,'Anmeldung wurde abgebrochen oder nicht erlaubt.');
+  if(!code||!returnedState||savedProvider!==provider||savedState!==returnedState)return oauthFailure(request,env,'OAuth-Sicherheitsprüfung fehlgeschlagen. Bitte erneut anmelden.');
+  if(!cfg.clientId||!cfg.clientSecret)return oauthFailure(request,env,'OAuth-Anbieter ist noch nicht vollständig eingerichtet.');
 
+  const form=new URLSearchParams({grant_type:'authorization_code',code,redirect_uri:cfg.redirectUri,client_id:cfg.clientId,client_secret:cfg.clientSecret});
+  let token;
   try{
-    const res=await fetch('https://challenges.cloudflare.com/turnstile/v0/siteverify',{
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body:JSON.stringify(payload)
-    });
-    const out=await res.json();
-    if(!out.success){
-      console.error('Turnstile Siteverify failed',JSON.stringify({
-        httpStatus:res.status,
-        errors:out['error-codes']||[],
-        hostname:out.hostname||null,
-        action:out.action||null
-      }));
+    const tokenRes=await fetch(cfg.tokenUrl,{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded','Accept':'application/json'},body:form});
+    token=await tokenRes.json();
+    if(!tokenRes.ok||!token.access_token){console.error('OAuth token exchange failed',provider,tokenRes.status,JSON.stringify(token));return oauthFailure(request,env,'Anmeldung beim Anbieter konnte nicht abgeschlossen werden.');}
+  }catch(error){console.error('OAuth token request failed',provider,error);return oauthFailure(request,env,'OAuth-Verbindung konnte nicht hergestellt werden.');}
+
+  let identity;
+  try{
+    const userRes=await fetch(cfg.userUrl,{headers:{Authorization:`Bearer ${token.access_token}`,'Accept':'application/json'}}),raw=await userRes.json();
+    if(!userRes.ok){console.error('OAuth userinfo failed',provider,userRes.status,JSON.stringify(raw));return oauthFailure(request,env,'Profildaten konnten nicht vom Anbieter geladen werden.');}
+    identity=normalizeOAuthIdentity(provider,raw);
+  }catch(error){console.error('OAuth userinfo request failed',provider,error);return oauthFailure(request,env,'Profildaten konnten nicht geladen werden.');}
+
+  if(!identity.id||!identity.email)return oauthFailure(request,env,'Der Anbieter hat keine nutzbare E-Mail-Adresse übermittelt.');
+  if(identity.emailVerified===false)return oauthFailure(request,env,'Bitte bestätige zuerst deine E-Mail-Adresse beim Anbieter.');
+
+  let user=await db.prepare(`SELECT u.id,u.email,u.username,u.role,u.status,COALESCE(po.completed,0) profile_completed
+    FROM oauth_accounts oa JOIN users u ON u.id=oa.user_id LEFT JOIN profile_onboarding po ON po.user_id=u.id
+    WHERE oa.provider=? AND oa.provider_user_id=?`).bind(provider,identity.id).first();
+
+  if(!user){
+    user=await db.prepare(`SELECT u.id,u.email,u.username,u.role,u.status,COALESCE(po.completed,0) profile_completed
+      FROM users u LEFT JOIN profile_onboarding po ON po.user_id=u.id WHERE u.email=? COLLATE NOCASE`).bind(identity.email).first();
+    if(user){
+      await db.prepare(`INSERT INTO oauth_accounts(provider,provider_user_id,user_id,provider_email,provider_username,avatar_url) VALUES(?,?,?,?,?,?)`).bind(provider,identity.id,user.id,identity.email,identity.username,identity.avatarUrl).run();
+    }else{
+      const username=await uniqueUsername(db,identity.username||identity.displayName||`${provider}player`,identity.id),placeholder=`oauth_only$${randomId(24)}`;
+      const created=await db.prepare('INSERT INTO users(email,username,password_hash) VALUES(?,?,?)').bind(identity.email,username,placeholder).run(),userId=created.meta.last_row_id;
+      await db.batch([
+        db.prepare(`INSERT INTO profiles(user_id,ea_id,platform,discord,country,position,secondary_position,bio) VALUES(?,?,?,?,?,?,?,?)`).bind(userId,'','',provider==='discord'?identity.username:'','DE','','','Neu in der Elite Pro League.'),
+        db.prepare('INSERT INTO coin_wallets(user_id,balance) VALUES(?,0)').bind(userId),
+        db.prepare('INSERT INTO profile_onboarding(user_id,shirt_number,completed) VALUES(?,NULL,0)').bind(userId),
+        db.prepare(`INSERT INTO oauth_accounts(provider,provider_user_id,user_id,provider_email,provider_username,avatar_url) VALUES(?,?,?,?,?,?)`).bind(provider,identity.id,userId,identity.email,identity.username,identity.avatarUrl)
+      ]);
+      user={id:userId,email:identity.email,username,role:'PLAYER',status:'ACTIVE',profile_completed:0};
     }
-    return out;
-  }catch(error){
-    console.error('Turnstile Siteverify request error',error);
-    return {success:false,'error-codes':['internal-error']};
+  }else{
+    await db.prepare(`UPDATE oauth_accounts SET provider_email=?,provider_username=?,avatar_url=?,updated_at=datetime('now') WHERE provider=? AND provider_user_id=?`).bind(identity.email,identity.username,identity.avatarUrl,provider,identity.id).run();
   }
+
+  if(user.status!=='ACTIVE')return oauthFailure(request,env,'Dieser EPL-Account ist derzeit gesperrt.');
+  const sid=randomId(32),maxAge=60*60*24*30;
+  await db.batch([db.prepare("DELETE FROM sessions WHERE expires_at<=datetime('now')"),db.prepare(`INSERT INTO sessions(id,user_id,expires_at) VALUES(?,?,datetime('now','+30 days'))`).bind(sid,user.id)]);
+  const destination=Number(user.profile_completed||0)===1?'/' : '/profil-einrichten';
+  return redirectResponse(new URL(destination,siteOrigin(request,env)).toString(),[secureCookie(sid,maxAge),clearOauthCookie()]);
+}
+function normalizeOAuthIdentity(provider,raw){
+  if(provider==='google')return {id:String(raw.sub||''),email:String(raw.email||'').toLowerCase(),emailVerified:raw.email_verified===true,username:cleanText(raw.name||raw.given_name||'GooglePlayer',80),displayName:cleanText(raw.name||'',80),avatarUrl:cleanText(raw.picture||'',500)};
+  return {id:String(raw.id||''),email:String(raw.email||'').toLowerCase(),emailVerified:raw.verified===true,username:cleanText(raw.global_name||raw.username||'DiscordPlayer',80),displayName:cleanText(raw.global_name||raw.username||'',80),avatarUrl:raw.avatar&&raw.id?`https://cdn.discordapp.com/avatars/${raw.id}/${raw.avatar}.png?size=256`:''};
+}
+function usernameBase(value,providerId){
+  let base=String(value||'').normalize('NFKD').replace(/[\u0300-\u036f]/g,'').replace(/[^A-Za-z0-9_.-]+/g,'').replace(/^[._-]+|[._-]+$/g,'').slice(0,24);
+  if(base.length<3)base=`Player${String(providerId||randomId(4)).replace(/[^A-Za-z0-9]/g,'').slice(-8)}`.slice(0,24);
+  return base;
+}
+async function uniqueUsername(db,value,providerId){
+  const base=usernameBase(value,providerId);
+  for(let i=0;i<40;i++){const suffix=i===0?'':String(i+1),candidate=`${base.slice(0,24-suffix.length)}${suffix}`;const exists=await db.prepare('SELECT 1 FROM users WHERE username=? COLLATE NOCASE').bind(candidate).first();if(!exists)return candidate;}
+  return `Player${randomId(6).replace(/[^A-Za-z0-9]/g,'').slice(0,12)}`;
 }
 async function currentUser(request,env){
   const db=requireDb(env), sid=cookieMap(request).epl_session;if(!sid)return null;
-  const row=await db.prepare(`SELECT u.id,u.email,u.username,u.role,u.status,p.avatar_key,p.cover_key,p.position,p.secondary_position,p.country,p.bio,w.balance AS coins
-    FROM sessions s JOIN users u ON u.id=s.user_id LEFT JOIN profiles p ON p.user_id=u.id LEFT JOIN coin_wallets w ON w.user_id=u.id
+  const row=await db.prepare(`SELECT u.id,u.email,u.username,u.role,u.status,p.avatar_key,p.cover_key,p.ea_id,p.platform,p.position,p.secondary_position,p.country,p.bio,
+      COALESCE(w.balance,0) AS coins,COALESCE(po.shirt_number,0) AS shirt_number,
+      COALESCE(po.completed,CASE WHEN length(trim(COALESCE(p.ea_id,'')))>0 AND length(trim(COALESCE(p.position,'')))>0 THEN 1 ELSE 0 END) AS profile_completed
+    FROM sessions s JOIN users u ON u.id=s.user_id LEFT JOIN profiles p ON p.user_id=u.id LEFT JOIN coin_wallets w ON w.user_id=u.id LEFT JOIN profile_onboarding po ON po.user_id=u.id
     WHERE s.id=? AND s.expires_at>datetime('now')`).bind(sid).first();
   return row||null;
 }
 async function requireUser(request,env,roles){const u=await currentUser(request,env);if(!u)throw httpError('Bitte zuerst anmelden.',401);if(u.status!=='ACTIVE')throw httpError('Account ist nicht aktiv.',403);if(roles && !roles.includes(u.role))throw httpError('Keine Berechtigung.',403);return u}
 function httpError(message,status){const e=new Error(message);e.status=status;return e}
 
-async function register(request,env){
-  const db=requireDb(env), body=await request.json();
-  const turnstile=await verifyTurnstile(request,env,body.turnstileToken);
-  if(!turnstile.success){
-    const codes=(turnstile['error-codes']||['unknown-error']).join(', ');
-    return fail(`Turnstile-Prüfung fehlgeschlagen: ${codes}`,403);
-  }
-  const username=cleanText(body.username,24), email=cleanText(body.email,160).toLowerCase(), password=String(body.password||'');
-  if(!/^[A-Za-z0-9_.-]{3,24}$/.test(username))return fail('Username: 3–24 Zeichen, nur Buchstaben, Zahlen, _ . -');
-  if(!/^\S+@\S+\.\S+$/.test(email))return fail('Ungültige E-Mail-Adresse.');
-  if(password.length<8)return fail('Passwort muss mindestens 8 Zeichen haben.');
-  const exists=await db.prepare('SELECT id FROM users WHERE email=? OR username=?').bind(email,username).first();if(exists)return fail('E-Mail oder Username ist bereits vergeben.',409);
-  const hash=await hashPassword(password);
-  const result=await db.prepare('INSERT INTO users(email,username,password_hash) VALUES(?,?,?)').bind(email,username,hash).run();
-  const userId=result.meta.last_row_id;
-  await db.batch([
-    db.prepare(`INSERT INTO profiles(user_id,ea_id,platform,discord,country,position,secondary_position,bio) VALUES(?,?,?,?,?,?,?,?)`).bind(userId,cleanText(body.eaId,80),cleanText(body.platform,30),cleanText(body.discord,80),cleanText(body.country||'DE',2).toUpperCase(),cleanText(body.position,8),cleanText(body.secondaryPosition,8),'Neu in der Elite Pro League.'),
-    db.prepare('INSERT INTO coin_wallets(user_id,balance) VALUES(?,0)').bind(userId)
-  ]);
-  const sid=randomId(32), maxAge=60*60*24*30;await db.prepare(`INSERT INTO sessions(id,user_id,expires_at) VALUES(?,?,datetime('now','+30 days'))`).bind(sid,userId).run();
-  return json({user:{id:userId,email,username,role:'PLAYER',coins:0}},201,{'set-cookie':secureCookie(sid,maxAge)});
-}
-async function login(request,env){
-  const db=requireDb(env), body=await request.json();
-  const turnstile=await verifyTurnstile(request,env,body.turnstileToken);
-  if(!turnstile.success){
-    const codes=(turnstile['error-codes']||['unknown-error']).join(', ');
-    return fail(`Turnstile-Prüfung fehlgeschlagen: ${codes}`,403);
-  }
-  const login=cleanText(body.login,160), password=String(body.password||'');
-  const row=await db.prepare(`SELECT u.*,COALESCE(w.balance,0) coins FROM users u LEFT JOIN coin_wallets w ON w.user_id=u.id WHERE u.email=? COLLATE NOCASE OR u.username=? COLLATE NOCASE`).bind(login,login).first();
-  if(!row || !(await verifyPassword(password,row.password_hash)))return fail('Login-Daten sind falsch.',401);if(row.status!=='ACTIVE')return fail('Account ist gesperrt.',403);
-  const sid=randomId(32), maxAge=60*60*24*30;await db.batch([db.prepare('DELETE FROM sessions WHERE expires_at<=datetime(\'now\')'),db.prepare(`INSERT INTO sessions(id,user_id,expires_at) VALUES(?,?,datetime('now','+30 days'))`).bind(sid,row.id)]);
-  return json({user:{id:row.id,email:row.email,username:row.username,role:row.role,coins:row.coins}},200,{'set-cookie':secureCookie(sid,maxAge)});
-}
 async function logout(request,env){const db=requireDb(env),sid=cookieMap(request).epl_session;if(sid)await db.prepare('DELETE FROM sessions WHERE id=?').bind(sid).run();return json({ok:true},200,{'set-cookie':'epl_session=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0'})}
 async function me(request,env){const user=await currentUser(request,env);return user?json({user}):fail('Nicht angemeldet.',401)}
 
@@ -251,7 +290,40 @@ async function adminCoinAward(request,env){const db=requireDb(env),u=await requi
 async function submitMatch(route,request,env){const db=requireDb(env),u=await requireUser(request,env,['MANAGER','LEAGUE_ADMIN','SUPER_ADMIN']),id=Number(route.split('/')[1]),b=await request.json();const m=await db.prepare('SELECT * FROM matches WHERE id=?').bind(id).first();if(!m)return fail('Match nicht gefunden.',404);if(!['LEAGUE_ADMIN','SUPER_ADMIN'].includes(u.role)){const managed=await db.prepare('SELECT 1 FROM clubs WHERE manager_user_id=? AND id IN (?,?)').bind(u.id,m.home_club_id,m.away_club_id).first();if(!managed)return fail('Du bist kein Manager eines beteiligten Clubs.',403);}const hs=Math.trunc(Number(b.homeScore)),as=Math.trunc(Number(b.awayScore));if(hs<0||as<0||hs>99||as>99)return fail('Ungültiges Ergebnis.');await db.prepare(`UPDATE matches SET home_score=?,away_score=?,status='SUBMITTED',submitted_by=?,notes=?,updated_at=datetime('now') WHERE id=?`).bind(hs,as,u.id,cleanText(b.notes,500),id).run();return json({ok:true,status:'SUBMITTED'})}
 async function confirmMatch(route,request,env){const db=requireDb(env),u=await requireUser(request,env,['MANAGER','LEAGUE_ADMIN','SUPER_ADMIN']),id=Number(route.split('/')[1]);const m=await db.prepare('SELECT * FROM matches WHERE id=?').bind(id).first();if(!m)return fail('Match nicht gefunden.',404);if(m.status!=='SUBMITTED')return fail('Match ist nicht zur Bestätigung eingereicht.',409);if(!['LEAGUE_ADMIN','SUPER_ADMIN'].includes(u.role)){const managed=await db.prepare('SELECT id FROM clubs WHERE manager_user_id=? AND id IN (?,?)').bind(u.id,m.home_club_id,m.away_club_id).first();if(!managed)return fail('Du bist kein Manager eines beteiligten Clubs.',403);const submitterClub=await db.prepare('SELECT id FROM clubs WHERE manager_user_id=?').bind(m.submitted_by).first();if(submitterClub&&submitterClub.id===managed.id)return fail('Das Ergebnis muss vom Gegner oder Admin bestätigt werden.',403);}await db.prepare(`UPDATE matches SET status='CONFIRMED',confirmed_by=?,updated_at=datetime('now') WHERE id=?`).bind(u.id,id).run();await awardMatchCoins(db,m);return json({ok:true,status:'CONFIRMED'})}
 
-async function updateProfile(request,env){const db=requireDb(env),u=await requireUser(request,env),b=await request.json();const fields={ea_id:cleanText(b.eaId,80),platform:cleanText(b.platform,30),console_id:cleanText(b.consoleId,80),discord:cleanText(b.discord,80),country:cleanText(b.country||'DE',2).toUpperCase(),position:cleanText(b.position,8),secondary_position:cleanText(b.secondaryPosition,8),bio:cleanText(b.bio,500),free_agent:b.freeAgent?1:0};await db.prepare(`UPDATE profiles SET ea_id=?,platform=?,console_id=?,discord=?,country=?,position=?,secondary_position=?,bio=?,free_agent=?,updated_at=datetime('now') WHERE user_id=?`).bind(fields.ea_id,fields.platform,fields.console_id,fields.discord,fields.country,fields.position,fields.secondary_position,fields.bio,fields.free_agent,u.id).run();return json({ok:true,profile:fields})}
+async function setupProfile(request,env){
+  const db=requireDb(env),u=await requireUser(request,env),b=await request.json();
+  const username=cleanText(b.username,24),eaId=cleanText(b.eaId,80),platform=cleanText(b.platform,30),position=cleanText(b.position,8),secondary=cleanText(b.secondaryPosition,8),country=cleanText(b.country||'DE',2).toUpperCase(),shirtNumber=Number(b.shirtNumber);
+  if(!/^[A-Za-z0-9_.-]{3,24}$/.test(username))return fail('EPL Benutzername: 3–24 Zeichen, nur Buchstaben, Zahlen, _ . -');
+  if(eaId.length<3)return fail('Bitte gib deine EA ID an.');
+  if(!['ps5','xbox-series','pc'].includes(platform))return fail('Bitte wähle eine gültige Plattform.');
+  if(!['ST','ZOM','ZM','ZDM','LM','RM','LV','RV','IV','TW'].includes(position))return fail('Bitte wähle deine Hauptposition.');
+  if(secondary&&!['ST','ZOM','ZM','ZDM','LM','RM','LV','RV','IV','TW'].includes(secondary))return fail('Ungültige Nebenposition.');
+  if(!Number.isInteger(shirtNumber)||shirtNumber<1||shirtNumber>99)return fail('Trikotnummer muss zwischen 1 und 99 liegen.');
+  if(!/^[A-Z]{2}$/.test(country))return fail('Land muss als zweistelliger Code angegeben werden, z. B. DE.');
+  const taken=await db.prepare('SELECT id FROM users WHERE username=? COLLATE NOCASE AND id<>?').bind(username,u.id).first();if(taken)return fail('Dieser EPL Benutzername ist bereits vergeben.',409);
+  await db.batch([
+    db.prepare(`UPDATE users SET username=?,updated_at=datetime('now') WHERE id=?`).bind(username,u.id),
+    db.prepare(`UPDATE profiles SET ea_id=?,platform=?,country=?,position=?,secondary_position=?,updated_at=datetime('now') WHERE user_id=?`).bind(eaId,platform,country,position,secondary,u.id),
+    db.prepare(`INSERT INTO profile_onboarding(user_id,shirt_number,completed,updated_at) VALUES(?,?,1,datetime('now')) ON CONFLICT(user_id) DO UPDATE SET shirt_number=excluded.shirt_number,completed=1,updated_at=datetime('now')`).bind(u.id,shirtNumber)
+  ]);
+  const refreshed=await currentUser(request,env);return json({ok:true,user:refreshed});
+}
+
+async function updateProfile(request,env){
+  const db=requireDb(env),u=await requireUser(request,env),b=await request.json();
+  const fields={
+    ea_id:b.eaId===undefined?cleanText(u.ea_id,80):cleanText(b.eaId,80),
+    platform:b.platform===undefined?cleanText(u.platform,30):cleanText(b.platform,30),
+    console_id:cleanText(b.consoleId,80),discord:cleanText(b.discord,80),
+    country:b.country===undefined?cleanText(u.country||'DE',2).toUpperCase():cleanText(b.country||'DE',2).toUpperCase(),
+    position:b.position===undefined?cleanText(u.position,8):cleanText(b.position,8),
+    secondary_position:b.secondaryPosition===undefined?cleanText(u.secondary_position,8):cleanText(b.secondaryPosition,8),
+    bio:b.bio===undefined?cleanText(u.bio,500):cleanText(b.bio,500),free_agent:b.freeAgent?1:0
+  };
+  await db.prepare(`UPDATE profiles SET ea_id=?,platform=?,console_id=?,discord=?,country=?,position=?,secondary_position=?,bio=?,free_agent=?,updated_at=datetime('now') WHERE user_id=?`).bind(fields.ea_id,fields.platform,fields.console_id,fields.discord,fields.country,fields.position,fields.secondary_position,fields.bio,fields.free_agent,u.id).run();
+  if(b.shirtNumber!==undefined){const n=Number(b.shirtNumber);if(Number.isInteger(n)&&n>=1&&n<=99)await db.prepare(`INSERT INTO profile_onboarding(user_id,shirt_number,completed,updated_at) VALUES(?,?,1,datetime('now')) ON CONFLICT(user_id) DO UPDATE SET shirt_number=excluded.shirt_number,updated_at=datetime('now')`).bind(u.id,n).run();}
+  return json({ok:true,profile:fields});
+}
 async function awardMatchCoins(db,m){const stats=await db.prepare('SELECT user_id,club_id,motm,clean_sheet FROM player_stats WHERE match_id=?').bind(m.id).all();const winner=m.home_score>m.away_score?m.home_club_id:m.away_score>m.home_score?m.away_club_id:null;for(const st of stats.results){let amount=0,parts=[];if(winner&&st.club_id===winner){amount+=150;parts.push('Siegbonus');}if(st.motm){amount+=100;parts.push('MOTM');}if(st.clean_sheet){amount+=75;parts.push('Clean Sheet');}if(!amount)continue;const exists=await db.prepare(`SELECT 1 FROM coin_transactions WHERE user_id=? AND type='PERFORMANCE' AND reference_type='MATCH' AND reference_id=?`).bind(st.user_id,String(m.id)).first();if(exists)continue;await db.batch([db.prepare('UPDATE coin_wallets SET balance=balance+?,lifetime_earned=lifetime_earned+?,updated_at=datetime(\'now\') WHERE user_id=?').bind(amount,amount,st.user_id),db.prepare(`INSERT INTO coin_transactions(user_id,amount,type,reference_type,reference_id,description) VALUES(?,?,'PERFORMANCE','MATCH',?,?)`).bind(st.user_id,amount,String(m.id),parts.join(' + '))]);}}
 async function eaClubInfo(request,env){const u=new URL(request.url),clubId=(u.searchParams.get('clubId')||'').trim(),platform=(u.searchParams.get('platform')||'common-gen5').trim();if(!/^\d{1,12}$/.test(clubId))return fail('Ungültige EA Club ID.');if(!['common-gen5','common-gen4'].includes(platform))return fail('Ungültige Plattform.');const target=`https://proclubs.ea.com/api/fc/clubs/info?platform=${encodeURIComponent(platform)}&clubIds=${encodeURIComponent(clubId)}`;const res=await fetch(target,{headers:{accept:'application/json','user-agent':'EPL-Elite-Pro-League/1.0'},signal:AbortSignal.timeout(9000)});if(!res.ok)return fail(`EA Clubs antwortet mit HTTP ${res.status}.`,502);const data=await res.json();return json({provider:'EA Clubs',clubId,platform,data});}
 async function getProfile(slug,request,env){const db=requireDb(env);const p=await db.prepare(`SELECT u.id,u.username,u.role,p.*,COALESCE(w.balance,0) coins,(SELECT COUNT(*) FROM follows WHERE followed_user_id=u.id) followers,(SELECT COUNT(*) FROM follows WHERE follower_user_id=u.id) following FROM users u LEFT JOIN profiles p ON p.user_id=u.id LEFT JOIN coin_wallets w ON w.user_id=u.id WHERE lower(u.username)=?`).bind(slug.toLowerCase()).first();if(!p)return fail('Spieler nicht gefunden.',404);const stats=await db.prepare(`SELECT COUNT(*) matches,COALESCE(SUM(goals),0) goals,COALESCE(SUM(assists),0) assists,ROUND(AVG(rating),2) rating FROM player_stats WHERE user_id=?`).bind(p.id).first();return json({profile:p,stats})}
@@ -261,7 +333,7 @@ async function getFixtures(env){const db=requireDb(env);const r=await db.prepare
 
 async function listPlayers(env){
   const db=requireDb(env);
-  const r=await db.prepare(`SELECT u.username,lower(u.username) slug,p.position,p.secondary_position,p.country,p.avatar_key,p.overall,COALESCE(c.name,'Free Agent') club,COALESCE((SELECT COUNT(*) FROM player_stats ps WHERE ps.user_id=u.id),0) matches,COALESCE((SELECT SUM(ps.goals) FROM player_stats ps WHERE ps.user_id=u.id),0) goals,COALESCE((SELECT SUM(ps.assists) FROM player_stats ps WHERE ps.user_id=u.id),0) assists,COALESCE(ROUND((SELECT AVG(ps.rating) FROM player_stats ps WHERE ps.user_id=u.id),2),COALESCE(p.overall,0)) rating FROM users u LEFT JOIN profiles p ON p.user_id=u.id LEFT JOIN club_members cm ON cm.user_id=u.id AND cm.left_at IS NULL LEFT JOIN clubs c ON c.id=cm.club_id WHERE u.status='ACTIVE' ORDER BY COALESCE((SELECT SUM(ps.goals) FROM player_stats ps WHERE ps.user_id=u.id),0) DESC, u.created_at DESC`).all();
+  const r=await db.prepare(`SELECT u.username,lower(u.username) slug,p.position,p.secondary_position,p.country,p.avatar_key,p.overall,COALESCE(c.name,'Free Agent') club,COALESCE((SELECT COUNT(*) FROM player_stats ps WHERE ps.user_id=u.id),0) matches,COALESCE((SELECT SUM(ps.goals) FROM player_stats ps WHERE ps.user_id=u.id),0) goals,COALESCE((SELECT SUM(ps.assists) FROM player_stats ps WHERE ps.user_id=u.id),0) assists,COALESCE(ROUND((SELECT AVG(ps.rating) FROM player_stats ps WHERE ps.user_id=u.id),2),COALESCE(p.overall,0)) rating FROM users u LEFT JOIN profiles p ON p.user_id=u.id LEFT JOIN profile_onboarding po ON po.user_id=u.id LEFT JOIN club_members cm ON cm.user_id=u.id AND cm.left_at IS NULL LEFT JOIN clubs c ON c.id=cm.club_id WHERE u.status='ACTIVE' AND COALESCE(po.completed,CASE WHEN length(trim(COALESCE(p.ea_id,'')))>0 AND length(trim(COALESCE(p.position,'')))>0 THEN 1 ELSE 0 END)=1 ORDER BY COALESCE((SELECT SUM(ps.goals) FROM player_stats ps WHERE ps.user_id=u.id),0) DESC, u.created_at DESC`).all();
   return json({players:r.results});
 }
 async function listClubs(env){
@@ -284,7 +356,7 @@ async function getBootstrap(env){
   const [news,fixtures,players,clubs,transfers,standings]=await Promise.all([
     db.prepare(`SELECT id,title,excerpt,image_key,published_at FROM news WHERE published=1 ORDER BY COALESCE(published_at,created_at) DESC LIMIT 3`).all(),
     db.prepare(`SELECT m.id,m.scheduled_at,m.status,h.name home_name,h.slug home_slug,a.name away_name,a.slug away_slug,d.name division_name FROM matches m JOIN clubs h ON h.id=m.home_club_id JOIN clubs a ON a.id=m.away_club_id JOIN divisions d ON d.id=m.division_id ORDER BY scheduled_at ASC LIMIT 6`).all(),
-    db.prepare(`SELECT u.username,lower(u.username) slug,p.position,p.country,p.avatar_key,COALESCE(c.name,'Free Agent') club,COALESCE((SELECT SUM(ps.goals) FROM player_stats ps WHERE ps.user_id=u.id),0) goals,COALESCE((SELECT SUM(ps.assists) FROM player_stats ps WHERE ps.user_id=u.id),0) assists,COALESCE((SELECT COUNT(*) FROM player_stats ps WHERE ps.user_id=u.id),0) matches,COALESCE(ROUND((SELECT AVG(ps.rating) FROM player_stats ps WHERE ps.user_id=u.id),2),COALESCE(p.overall,0)) rating FROM users u LEFT JOIN profiles p ON p.user_id=u.id LEFT JOIN club_members cm ON cm.user_id=u.id AND cm.left_at IS NULL LEFT JOIN clubs c ON c.id=cm.club_id WHERE u.status='ACTIVE' ORDER BY goals DESC,matches DESC LIMIT 6`).all(),
+    db.prepare(`SELECT u.username,lower(u.username) slug,p.position,p.country,p.avatar_key,COALESCE(c.name,'Free Agent') club,COALESCE((SELECT SUM(ps.goals) FROM player_stats ps WHERE ps.user_id=u.id),0) goals,COALESCE((SELECT SUM(ps.assists) FROM player_stats ps WHERE ps.user_id=u.id),0) assists,COALESCE((SELECT COUNT(*) FROM player_stats ps WHERE ps.user_id=u.id),0) matches,COALESCE(ROUND((SELECT AVG(ps.rating) FROM player_stats ps WHERE ps.user_id=u.id),2),COALESCE(p.overall,0)) rating FROM users u LEFT JOIN profiles p ON p.user_id=u.id LEFT JOIN profile_onboarding po ON po.user_id=u.id LEFT JOIN club_members cm ON cm.user_id=u.id AND cm.left_at IS NULL LEFT JOIN clubs c ON c.id=cm.club_id WHERE u.status='ACTIVE' AND COALESCE(po.completed,CASE WHEN length(trim(COALESCE(p.ea_id,'')))>0 AND length(trim(COALESCE(p.position,'')))>0 THEN 1 ELSE 0 END)=1 ORDER BY goals DESC,matches DESC LIMIT 6`).all(),
     db.prepare(`SELECT c.name,c.slug,c.logo_key,c.reputation,c.followers_count,COALESCE(d.name,'Ohne Division') division,u.username manager FROM clubs c LEFT JOIN divisions d ON d.id=c.division_id LEFT JOIN users u ON u.id=c.manager_user_id ORDER BY c.created_at DESC LIMIT 8`).all(),
     db.prepare(`SELECT t.id,t.type,t.created_at,u.username player,p.position,p.overall rating,fc.name from_club,tc.name to_club FROM transfers t LEFT JOIN users u ON u.id=t.user_id LEFT JOIN profiles p ON p.user_id=t.user_id LEFT JOIN clubs fc ON fc.id=t.from_club_id LEFT JOIN clubs tc ON tc.id=t.to_club_id ORDER BY t.created_at DESC LIMIT 6`).all(),
     db.prepare(`WITH stats AS (SELECT sc.club_id,COUNT(m.id) played,SUM(CASE WHEN (m.home_club_id=sc.club_id AND m.home_score>m.away_score) OR (m.away_club_id=sc.club_id AND m.away_score>m.home_score) THEN 1 ELSE 0 END) wins,SUM(CASE WHEN m.home_score=m.away_score THEN 1 ELSE 0 END) draws,SUM(CASE WHEN (m.home_club_id=sc.club_id AND m.home_score<m.away_score) OR (m.away_club_id=sc.club_id AND m.away_score<m.home_score) THEN 1 ELSE 0 END) losses,SUM(CASE WHEN m.home_club_id=sc.club_id THEN m.home_score ELSE m.away_score END) gf,SUM(CASE WHEN m.home_club_id=sc.club_id THEN m.away_score ELSE m.home_score END) ga FROM season_clubs sc LEFT JOIN matches m ON m.season_id=sc.season_id AND (m.home_club_id=sc.club_id OR m.away_club_id=sc.club_id) AND m.status='CONFIRMED' WHERE sc.season_id=1 GROUP BY sc.club_id) SELECT c.id,c.name,c.slug,COALESCE(s.played,0) played,COALESCE(s.wins,0) wins,COALESCE(s.draws,0) draws,COALESCE(s.losses,0) losses,COALESCE(s.gf,0) gf,COALESCE(s.ga,0) ga,(COALESCE(s.wins,0)*3+COALESCE(s.draws,0)) points FROM clubs c JOIN season_clubs sc ON sc.club_id=c.id AND sc.season_id=1 LEFT JOIN stats s ON s.club_id=c.id ORDER BY points DESC,(gf-ga) DESC,gf DESC LIMIT 6`).all()

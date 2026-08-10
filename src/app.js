@@ -3,7 +3,7 @@ import { demo } from './data.js';
 const app = document.querySelector('#app');
 const state = {
   me: null,
-  config: { turnstileSiteKey: '', paymentsEnabled: false },
+  config: { paymentsEnabled: false, oauthGoogleEnabled: false, oauthDiscordEnabled: false },
   live: { news: [], fixtures: [], standings: [], players: [], clubs: [], transfers: [] },
   demoCoins: 0,
   following: new Set(JSON.parse(localStorage.getItem('epl_following') || '[]')),
@@ -15,7 +15,7 @@ const state = {
 const routes = [
   ['/', renderHome], ['/news', renderNews], ['/liga', renderLeague], ['/tabelle', renderTable], ['/teams', renderTeams],
   ['/spieler', renderPlayers], ['/transfers', renderTransfers], ['/shop', renderShop], ['/regeln', renderRules],
-  ['/registrieren', renderRegister], ['/login', renderLogin], ['/manager', renderManager], ['/admin', renderAdmin],
+  ['/registrieren', renderRegister], ['/login', renderLogin], ['/profil-einrichten', renderProfileSetup], ['/manager', renderManager], ['/admin', renderAdmin],
 ];
 
 const POSITIONS = ['ST','ZOM','ZM','ZDM','LM','RM','LV','RV','IV','TW'];
@@ -35,6 +35,12 @@ function clubLogoFor(club){return assetUrl(club?.logo_key || club?.logo, demo.br
 function coverFor(obj){return assetUrl(obj?.cover_key || obj?.cover, demo.brand.defaultCover)}
 function clubName(obj){return obj?.club || obj?.name || 'Unbekannter Club';}
 function emptyCard(title,text){return `<div class="empty"><strong>${title}</strong><div style="margin-top:8px">${text}</div></div>`;}
+function consumeOAuthNotice(){
+  const params=new URLSearchParams(location.search),message=params.get('oauth_error');
+  if(!message)return;
+  toast(message,'error');
+  history.replaceState({},'',location.pathname);
+}
 
 async function api(url, options={}){
   const headers = { ...(options.headers||{}) };
@@ -50,6 +56,7 @@ async function bootstrap(){
   try { state.me = (await api('/api/auth/me')).user; } catch {}
   await refreshPublicData();
   route();
+  consumeOAuthNotice();
 }
 async function refreshPublicData(){
   try{
@@ -175,17 +182,61 @@ function renderTransfers(){
 }
 
 function renderRules(){
-  return `<div class="container simple-page"><div class="page-heading"><div><div class="eyebrow">Fair Play</div><h1>Regelwerk</h1><p>Grundregeln für Spieler, Manager und Ligabetrieb.</p></div></div><div class="rules-grid"><aside class="panel rule-nav">${['Allgemein','Registrierung','Kader & Verträge','Matchbetrieb','Ergebnisse','Transfers','Sperren','Verhalten'].map((x,i)=>`<button class="${i===0?'active':''}">${x}</button>`).join('')}</aside><article class="panel rule-content"><h2>1. Allgemeine Bestimmungen</h2><p>Die Elite Pro League ist eine kompetitive Pro-Clubs-Liga. Jeder Spieler darf nur einen aktiven Account führen. Unsportliches Verhalten, absichtliche Spielmanipulation oder Täuschung kann zu Sanktionen führen.</p><h3>2. Registrierung</h3><p>Spieler registrieren sich mit E-Mail, Username und Profilinformationen. Manager und Liga-Admins verwalten anschließend Clubs, Verträge, Bewerbungen und Spieltage.</p><h3>3. Matchbetrieb</h3><p>Spiele werden nach Spielplan angesetzt. Ergebnisse müssen bestätigt werden, bevor sie in Tabelle und Statistiken einfließen.</p><h3>4. Transfers</h3><p>Vertragsangebote, Bewerbungen und Wechsel laufen über die Plattform und können von berechtigten Rollen nachvollzogen werden.</p></article></div></div>`;
+  return `<div class="container simple-page"><div class="page-heading"><div><div class="eyebrow">Fair Play</div><h1>Regelwerk</h1><p>Grundregeln für Spieler, Manager und Ligabetrieb.</p></div></div><div class="rules-grid"><aside class="panel rule-nav">${['Allgemein','Registrierung','Kader & Verträge','Matchbetrieb','Ergebnisse','Transfers','Sperren','Verhalten'].map((x,i)=>`<button class="${i===0?'active':''}">${x}</button>`).join('')}</aside><article class="panel rule-content"><h2>1. Allgemeine Bestimmungen</h2><p>Die Elite Pro League ist eine kompetitive Pro-Clubs-Liga. Jeder Spieler darf nur einen aktiven Account führen. Unsportliches Verhalten, absichtliche Spielmanipulation oder Täuschung kann zu Sanktionen führen.</p><h3>2. Registrierung</h3><p>Spieler melden sich sicher über Google oder Discord an und ergänzen anschließend EA ID, Plattform und Profilinformationen. Manager und Liga-Admins verwalten danach Clubs, Verträge, Bewerbungen und Spieltage.</p><h3>3. Matchbetrieb</h3><p>Spiele werden nach Spielplan angesetzt. Ergebnisse müssen bestätigt werden, bevor sie in Tabelle und Statistiken einfließen.</p><h3>4. Transfers</h3><p>Vertragsangebote, Bewerbungen und Wechsel laufen über die Plattform und können von berechtigten Rollen nachvollzogen werden.</p></article></div></div>`;
 }
 
-function renderRegister(){return `<div class="auth-wrap"><section class="panel auth-card"><h1>Registrierung</h1><p class="muted">Erstelle dein EPL Spielerprofil und starte direkt in die Liga.</p><form id="registerForm"><div class="form-grid"><div class="field"><label>Username</label><input name="username" required></div><div class="field"><label>E-Mail</label><input type="email" name="email" required></div><div class="field"><label>Passwort</label><input type="password" name="password" required></div><div class="field"><label>Passwort wiederholen</label><input type="password" name="password2" required></div><div class="field"><label>EA ID</label><input name="eaId"></div><div class="field"><label>Plattform</label><select name="platform"><option>common-gen5</option><option>common-gen4</option><option>pc</option></select></div><div class="field"><label>Discord</label><input name="discord"></div><div class="field"><label>Land</label><input name="country" value="DE"></div><div class="field"><label>Hauptposition</label><select name="position">${POSITIONS.map(x=>`<option>${x}</option>`).join('')}</select></div><div class="field"><label>Nebenposition</label><select name="secondaryPosition">${POSITIONS.map(x=>`<option>${x}</option>`).join('')}</select></div><div class="field full"><div id="turnstileSlot"></div></div></div><div class="form-actions"><button class="btn btn-primary">PROFIL ERSTELLEN</button></div></form></section></div>`;}
-function renderLogin(){return `<div class="auth-wrap"><section class="panel auth-card"><h1>Login</h1><p class="muted">Melde dich mit deinem EPL Account an.</p><form id="loginForm"><div class="form-grid"><div class="field full"><label>E-Mail oder Username</label><input name="login" required></div><div class="field full"><label>Passwort</label><input type="password" name="password" required></div><div class="field full"><div id="turnstileSlot"></div></div></div><div class="form-actions"><button class="btn btn-primary">ANMELDEN</button></div></form></section></div>`;}
+function oauthButton(provider,label,enabled){
+  const cls=`oauth-btn oauth-${provider}${enabled?'':' disabled'}`;
+  if(!enabled)return `<button class="${cls}" type="button" disabled><span class="oauth-mark">${provider==='google'?'G':'D'}</span><span>${label}</span><small>Noch nicht eingerichtet</small></button>`;
+  return `<a class="${cls}" href="/api/auth/oauth/${provider}/start"><span class="oauth-mark">${provider==='google'?'G':'D'}</span><span>${label}</span><span class="oauth-arrow">→</span></a>`;
+}
+function renderOAuthAuth(mode='login'){
+  if(state.me){
+    const incomplete=Number(state.me.profile_completed||0)!==1;
+    return `<div class="auth-wrap"><section class="panel auth-card oauth-card"><div class="oauth-kicker">EPL ACCOUNT</div><h1>Du bist bereits angemeldet</h1><p class="muted">Angemeldet als <strong>${esc(state.me.username)}</strong>.</p><div class="form-actions">${incomplete?'<a class="btn btn-primary" data-link href="/profil-einrichten">PROFIL VERVOLLSTÄNDIGEN</a>':`<a class="btn btn-primary" data-link href="/spieler/${esc(state.me.username.toLowerCase())}">ZU MEINEM PROFIL</a>`}</div></section></div>`;
+  }
+  const isRegister=mode==='register';
+  return `<div class="auth-wrap"><section class="panel auth-card oauth-card">
+    <div class="oauth-kicker">EPL • ELITE PRO LEAGUE</div>
+    <h1>${isRegister?'EPL Account erstellen':'Bei EPL anmelden'}</h1>
+    <p class="muted">${isRegister?'Registriere dich sicher mit deinem bestehenden Google- oder Discord-Konto.':'Nutze dein Google- oder Discord-Konto. Kein EPL-Passwort erforderlich.'}</p>
+    <div class="oauth-stack">
+      ${oauthButton('discord','Weiter mit Discord',state.config.oauthDiscordEnabled)}
+      ${oauthButton('google','Weiter mit Google',state.config.oauthGoogleEnabled)}
+    </div>
+    <div class="oauth-security"><span>✓</span><div><strong>Kein Passwort bei EPL</strong><small>Google bzw. Discord bestätigt deine Identität. EPL erhält nur die für dein Konto nötigen Basisdaten.</small></div></div>
+    <p class="oauth-foot">Nach der ersten Anmeldung ergänzt du nur noch EA ID, Plattform, Position und Trikotnummer.</p>
+    ${(!state.config.oauthDiscordEnabled&&!state.config.oauthGoogleEnabled)?'<div class="oauth-warning">Die OAuth-Zugangsdaten müssen noch in Cloudflare eingerichtet werden.</div>':''}
+  </section></div>`;
+}
+function renderRegister(){return renderOAuthAuth('register');}
+function renderLogin(){return renderOAuthAuth('login');}
+function renderProfileSetup(){
+  if(!state.me)return `<div class="auth-wrap"><section class="panel auth-card"><h1>Anmeldung erforderlich</h1><p class="muted">Melde dich zuerst mit Google oder Discord an.</p><div class="form-actions"><a class="btn btn-primary" data-link href="/login">ZUM LOGIN</a></div></section></div>`;
+  if(Number(state.me.profile_completed||0)===1)return `<div class="auth-wrap"><section class="panel auth-card"><h1>Profil ist vollständig</h1><p class="muted">Dein EPL Spielerprofil wurde bereits eingerichtet.</p><div class="form-actions"><a class="btn btn-primary" data-link href="/spieler/${esc(state.me.username.toLowerCase())}">MEIN PROFIL ÖFFNEN</a></div></section></div>`;
+  const username=esc(state.me.username||'');
+  return `<div class="auth-wrap profile-setup-wrap"><section class="panel auth-card profile-setup-card">
+    <div class="setup-progress"><span class="done">1</span><i></i><span class="active">2</span></div>
+    <div class="oauth-kicker">SCHRITT 2 VON 2</div><h1>Spielerprofil vervollständigen</h1>
+    <p class="muted">Dein Login ist erledigt. Jetzt fehlen nur noch deine Pro-Clubs-Daten.</p>
+    <form id="profileSetupForm"><div class="form-grid">
+      <div class="field"><label>EPL Benutzername *</label><input name="username" value="${username}" minlength="3" maxlength="24" pattern="[A-Za-z0-9_.-]{3,24}" required><small>3–24 Zeichen: Buchstaben, Zahlen, _ . -</small></div>
+      <div class="field"><label>EA ID *</label><input name="eaId" value="${esc(state.me.ea_id||'')}" maxlength="80" placeholder="z. B. ChabaChuba" required></div>
+      <div class="field"><label>Plattform *</label><select name="platform" required><option value="">Bitte wählen</option><option value="ps5">PlayStation 5</option><option value="xbox-series">Xbox Series X|S</option><option value="pc">PC</option></select></div>
+      <div class="field"><label>Land *</label><input name="country" value="${esc(state.me.country||'DE')}" maxlength="2" minlength="2" required></div>
+      <div class="field"><label>Hauptposition *</label><select name="position" required><option value="">Bitte wählen</option>${POSITIONS.map(x=>`<option value="${x}">${x}</option>`).join('')}</select></div>
+      <div class="field"><label>Nebenposition</label><select name="secondaryPosition"><option value="">Keine</option>${POSITIONS.map(x=>`<option value="${x}">${x}</option>`).join('')}</select></div>
+      <div class="field"><label>Trikotnummer *</label><input type="number" name="shirtNumber" min="1" max="99" value="${Number(state.me.shirt_number||10)||10}" required></div>
+      <div class="field setup-provider"><label>Login-E-Mail</label><div class="readonly-value">${esc(state.me.email||'')}</div><small>Kommt sicher von deinem Google-/Discord-Konto.</small></div>
+    </div><div class="form-actions setup-actions"><button class="btn btn-primary" type="submit">EPL PROFIL ERSTELLEN</button></div></form>
+  </section></div>`;
+}
 
 function dashboardShell(title, side, body){
   return `<div class="container simple-page"><div class="page-heading"><div><div class="eyebrow">Control Center</div><h1>${title}</h1><p>Direkt für Cloudflare Pages, D1 und R2 vorbereitet.</p></div></div><div class="dashboard-grid"><aside class="panel dash-side"><div class="dash-user"><strong>${esc(state.me?.username || 'Gast')}</strong><div class="tiny muted">${esc(state.me?.role || '—')}</div></div><div class="dash-menu">${side.map((x,i)=>`<button class="${i===0?'active':''}">${x}</button>`).join('')}</div></aside><div>${body}</div></div></div>`;
 }
 function renderManager(){return dashboardShell('Manager Panel',['Übersicht','Kader','Verträge','Bewerbungen','Aufstellung','Matches','Club Einstellungen'],`<div class="metric-grid">${[['Aktiver Kader',0],['Offene Bewerbungen',0],['Laufende Verträge',0],['Anstehende Matches',0]].map(m=>`<section class="panel metric"><strong>${m[1]}</strong><span>${m[0]}</span></section>`).join('')}</div><section class="panel dash-main" style="margin-top:12px">${emptyCard('Online-ready ohne Platzhalter','Dieses Panel ist sofort einsatzbereit. Sobald ein Manager Clubs, Spieler oder Verträge in D1 angelegt hat, erscheinen die echten Daten hier automatisch.')}</section>`);}
-function renderAdmin(){return dashboardShell('Admin Panel',['Dashboard','Benutzer','Clubs','Seasons','Divisionen','Spielplan','Ergebnisse','Transfers','News','Settings'],`<div class="metric-grid">${[['Benutzer',state.live.players.length],['Clubs',state.live.clubs.length],['News',state.live.news.length],['Transfers',state.live.transfers.length]].map(m=>`<section class="panel metric"><strong>${m[1]}</strong><span>${m[0]}</span></section>`).join('')}</div><section class="panel dash-main" style="margin-top:12px"><table class="admin-table"><thead><tr><th>Bereich</th><th>Status</th><th>Hinweis</th></tr></thead><tbody><tr><td>D1</td><td class="green">Vorbereitet</td><td>Schema, Rollen, Verträge, Coins und Shop sind angelegt.</td></tr><tr><td>R2</td><td class="green">Vorbereitet</td><td>Profilbilder, Clublogos und Cover können per Upload gespeichert werden.</td></tr><tr><td>Turnstile</td><td class="green">Vorbereitet</td><td>Serverseitige Prüfung für Registrierung und Login vorhanden.</td></tr><tr><td>Live-Daten</td><td class="blue">Ohne Platzhalter</td><td>Öffentliche Bereiche zeigen nur noch reale Daten aus D1.</td></tr></tbody></table></section>`);}
+function renderAdmin(){return dashboardShell('Admin Panel',['Dashboard','Benutzer','Clubs','Seasons','Divisionen','Spielplan','Ergebnisse','Transfers','News','Settings'],`<div class="metric-grid">${[['Benutzer',state.live.players.length],['Clubs',state.live.clubs.length],['News',state.live.news.length],['Transfers',state.live.transfers.length]].map(m=>`<section class="panel metric"><strong>${m[1]}</strong><span>${m[0]}</span></section>`).join('')}</div><section class="panel dash-main" style="margin-top:12px"><table class="admin-table"><thead><tr><th>Bereich</th><th>Status</th><th>Hinweis</th></tr></thead><tbody><tr><td>D1</td><td class="green">Vorbereitet</td><td>Schema, Rollen, Verträge, Coins und Shop sind angelegt.</td></tr><tr><td>R2</td><td class="green">Vorbereitet</td><td>Profilbilder, Clublogos und Cover können per Upload gespeichert werden.</td></tr><tr><td>OAuth</td><td class="green">Vorbereitet</td><td>Google- und Discord-Login mit serverseitigem Authorization-Code-Flow.</td></tr><tr><td>Live-Daten</td><td class="blue">Ohne Platzhalter</td><td>Öffentliche Bereiche zeigen nur noch reale Daten aus D1.</td></tr></tbody></table></section>`);}
 
 function modal(title, body){const wrap=document.createElement('div');wrap.className='modal-backdrop';wrap.innerHTML=`<section class="panel modal"><button class="modal-close">×</button><h2>${title}</h2>${body}</section>`;document.body.append(wrap);wrap.querySelector('.modal-close').onclick=()=>wrap.remove();wrap.onclick=e=>{if(e.target===wrap)wrap.remove()};return wrap}
 
@@ -280,8 +331,7 @@ function bindPage(p){
   document.querySelector('[data-wallet]')?.addEventListener('click',()=>modal('EPL Coins Verlauf',`<p class="muted">Deine Wallet speichert jede Gutschrift und Ausgabe nachvollziehbar in D1.</p><table class="admin-table"><tr><td>Siegbonus</td><td class="green">+150 E</td></tr><tr><td>Man of the Match</td><td class="green">+100 E</td></tr><tr><td>Shop-Kauf</td><td class="red">- Coins</td></tr></table>`));
   document.querySelector('[data-create-club]')?.addEventListener('click',()=>{if(!state.me)return goto('/login'); const m=modal('Club gründen',`<form id="clubForm"><div class="form-grid"><div class="field full"><label>Clubname</label><input name="name" required></div><div class="field"><label>EA Club ID</label><input name="eaClubId"></div><div class="field"><label>Plattform</label><select name="platform"><option>common-gen5</option><option>pc</option></select></div></div><div class="form-actions"><button class="btn btn-primary">CLUB ERSTELLEN</button></div></form>`);m.querySelector('form').onsubmit=async e=>{e.preventDefault();const fd=Object.fromEntries(new FormData(e.target));try{await api('/api/clubs',{method:'POST',body:JSON.stringify(fd)});toast('Club angelegt.');m.remove(); await refreshPublicData(); route();}catch(err){toast(err.message,'error')}}});
   document.querySelector('[data-apply]')?.addEventListener('click',()=>{if(!state.me)return goto('/login'); const slug = path().split('/')[2]; const m=modal('Bei Club bewerben',`<form id="applyForm"><div class="field"><label>Nachricht</label><textarea name="message" rows="5">Hallo, ich möchte mich für euren Club bewerben.</textarea></div><div class="form-actions"><button class="btn btn-primary">BEWERBUNG SENDEN</button></div></form>`);m.querySelector('form').onsubmit=async e=>{e.preventDefault();try{await api('/api/applications',{method:'POST',body:JSON.stringify({clubSlug:slug,message:e.target.message.value})});toast('Bewerbung wurde gesendet.');m.remove()}catch(err){toast(err.message,'error')}}});
-  document.querySelector('#registerForm') && bindRegister();
-  document.querySelector('#loginForm') && bindLogin();
+  document.querySelector('#profileSetupForm') && bindProfileSetup();
   document.querySelectorAll('[data-buy-item]').forEach(b=>b.addEventListener('click',()=>buyItem(Number(b.dataset.buyItem),b)));
   document.querySelectorAll('[data-coin-pack]').forEach(b=>b.addEventListener('click',()=>buyCoins(b.dataset.coinPack)));
   document.querySelector('[data-edit-profile]')?.addEventListener('click',()=>{
@@ -320,24 +370,22 @@ async function hydrateClubProfile(slug){
   const mount=document.querySelector('#clubProfileMount'); if(!mount) return;
   try{ const data=await api(`/api/club/${encodeURIComponent(slug)}`); mount.outerHTML=renderClubProfile(data,slug); bindPage('/club/'+slug); }catch{ mount.outerHTML=renderClubProfile(null,slug); }
 }
-async function bindTurnstile(form){
-  if(!state.config.turnstileSiteKey) return {getToken:()=>'',reset:()=>{}};
-  await new Promise(r=>{ if(window.turnstile) return r(); const s=document.createElement('script'); s.src='https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit'; s.async=true; s.onload=r; document.head.append(s); });
-  let token='';
-  const widgetId=window.turnstile.render(form.querySelector('#turnstileSlot'),{
-    sitekey:state.config.turnstileSiteKey,
-    theme:'dark',
-    callback:t=>token=t,
-    'expired-callback':()=>token='',
-    'error-callback':()=>token=''
-  });
-  return {
-    getToken:()=>token,
-    reset:()=>{ token=''; try{window.turnstile.reset(widgetId)}catch{} }
+async function bindProfileSetup(){
+  const form=document.querySelector('#profileSetupForm');if(!form)return;
+  const platform=form.platform,position=form.position,secondary=form.secondaryPosition;
+  if(state.me?.platform)platform.value=state.me.platform;
+  if(state.me?.position)position.value=state.me.position;
+  if(state.me?.secondary_position)secondary.value=state.me.secondary_position;
+  form.onsubmit=async e=>{
+    e.preventDefault();
+    const submit=form.querySelector('button[type="submit"]'),fd=Object.fromEntries(new FormData(form));
+    submit.disabled=true;submit.textContent='PROFIL WIRD ERSTELLT…';
+    try{
+      const r=await api('/api/profile/setup',{method:'POST',body:JSON.stringify(fd)});
+      state.me=r.user;await refreshPublicData();toast('Dein EPL Spielerprofil ist bereit.');goto(`/spieler/${r.user.username.toLowerCase()}`);
+    }catch(err){submit.disabled=false;submit.textContent='EPL PROFIL ERSTELLEN';toast(err.message,'error');}
   };
 }
-async function bindRegister(){ const form=document.querySelector('#registerForm'); const ts=await bindTurnstile(form); form.onsubmit=async e=>{e.preventDefault(); const fd=Object.fromEntries(new FormData(form)); if(fd.password!==fd.password2) return toast('Passwörter stimmen nicht überein.','error'); delete fd.password2; fd.turnstileToken=ts.getToken(); try{ const r=await api('/api/auth/register',{method:'POST',body:JSON.stringify(fd)}); state.me=r.user; await refreshPublicData(); toast('Account erstellt.'); goto(`/spieler/${r.user.username.toLowerCase()}`); }catch(err){ if(String(err.message).includes('Turnstile')) ts.reset(); toast(err.message,'error'); }}; }
-async function bindLogin(){ const form=document.querySelector('#loginForm'); const ts=await bindTurnstile(form); form.onsubmit=async e=>{e.preventDefault(); const fd=Object.fromEntries(new FormData(form)); fd.turnstileToken=ts.getToken(); try{ const r=await api('/api/auth/login',{method:'POST',body:JSON.stringify(fd)}); state.me=r.user; toast('Login erfolgreich.'); goto('/'); }catch(err){ if(String(err.message).includes('Turnstile')) ts.reset(); toast(err.message,'error'); }}; }
 async function buyItem(id,btn){ const item=demo.shop.find(x=>x.id===id); if(!state.me){ toast('Bitte zuerst anmelden, um Shop-Artikel zu kaufen.','error'); return goto('/login'); } if(state.owned.has(String(id))) return toast('Dieses Cosmetic besitzt du bereits.'); try{ const r=await api('/api/shop/purchase',{method:'POST',body:JSON.stringify({itemId:id})}); state.me.coins=r.balance; state.owned.add(String(id)); route(); toast(`${item.name} gekauft.`);}catch(e){toast(e.message,'error')} }
 async function buyCoins(packId){ const pack=demo.coinPacks.find(x=>x.id===packId); if(!state.me){ toast('Bitte zuerst anmelden, um EPL Coins zu kaufen.','error'); return goto('/login'); } if(!state.config.paymentsEnabled){ return toast('Echtgeld-Käufe sind momentan noch nicht aktiviert.','error'); } try{ const r=await api('/api/payments/checkout',{method:'POST',body:JSON.stringify({packId})}); location.href=r.url; }catch(e){toast(e.message,'error')} }
 
