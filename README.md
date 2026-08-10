@@ -120,3 +120,6 @@ Die alten Passwort-Endpunkte geben absichtlich HTTP 410 zurück.
 Die Produktionskonfiguration dieses Projekts soll aktuell aus dem **Cloudflare Dashboard** kommen. Liegt im Repository noch eine `wrangler.toml` mit `pages_build_output_dir`, lösche sie vor dem Deployment, sofern du nicht bewusst alle D1/R2/Variablen vollständig in Wrangler verwalten willst.
 
 Eine Schritt-für-Schritt-Anleitung liegt in [`OAUTH-SETUP-DE.md`](./OAUTH-SETUP-DE.md).
+
+## Social / Cosmetics Update (0005)
+Für Online-Status, Shop-Inventar-Ausrüstung, Social Feed, Reaktionen, Kommentare und Antworten muss nach `0004_admin_rbac.sql` zusätzlich `migrations/0005_social_inventory_presence.sql` einmalig auf der Remote-D1-Datenbank ausgeführt werden. Details stehen in `SOCIAL-SHOP-UPDATE-DE.md`.

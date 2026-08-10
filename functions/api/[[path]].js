@@ -27,7 +27,12 @@ export async function onRequest(context){
     if(route === 'profile/setup' && method === 'POST') return setupProfile(request,env);
     if(route === 'auth/logout' && method === 'POST') return logout(request,env);
     if(route === 'auth/me' && method === 'GET') return me(request,env);
+    if(route === 'presence' && method === 'POST') return heartbeat(request,env);
+    if(route === 'social/state' && method === 'GET') return socialState(request,env);
+    if(route === 'social/feed' && method === 'GET') return socialFeed(request,env);
     if(route === 'social/follow' && method === 'POST') return follow(request,env);
+    if(route === 'inventory' && method === 'GET') return getInventory(request,env);
+    if(route === 'shop/equip' && method === 'POST') return equipItem(request,env);
     if(route === 'clubs' && method === 'POST') return createClub(request,env);
     if(route === 'applications' && method === 'POST') return createApplication(request,env);
     if(route === 'contracts' && method === 'POST') return createContract(request,env);
@@ -48,6 +53,10 @@ export async function onRequest(context){
     if(route === 'clubs' && method === 'GET') return listClubs(env);
     if(route === 'news' && method === 'GET') return listNews(env);
     if(route === 'transfers' && method === 'GET') return listTransfers(env);
+    if(/^posts\/\d+\/reaction$/.test(route) && method === 'POST') return postReaction(route,request,env);
+    if(/^posts\/\d+\/comments$/.test(route) && method === 'GET') return getPostComments(route,request,env);
+    if(/^posts\/\d+\/comments$/.test(route) && method === 'POST') return createComment(route,request,env);
+    if(/^comments\/\d+\/like$/.test(route) && method === 'POST') return commentLike(route,request,env);
     if(route === 'posts' && method === 'POST') return createPost(request,env);
     if(route === 'admin/coin-award' && method === 'POST') return adminCoinAward(request,env);
     if(route === 'admin/overview' && method === 'GET') return adminOverview(request,env);
@@ -193,7 +202,7 @@ async function uniqueUsername(db,value,providerId){
 }
 async function currentUser(request,env){
   const db=requireDb(env), sid=cookieMap(request).epl_session;if(!sid)return null;
-  const row=await db.prepare(`SELECT u.id,u.email,u.username,u.role,u.status,p.avatar_key,p.cover_key,p.ea_id,p.platform,p.position,p.secondary_position,p.country,p.bio,
+  const row=await db.prepare(`SELECT u.id,u.email,u.username,u.role,u.status,p.avatar_key,p.cover_key,p.ea_id,p.platform,p.position,p.secondary_position,p.country,p.bio,p.discord,p.free_agent,p.equipped_avatar_frame_id,p.equipped_cover_frame_id,p.equipped_name_effect_id,
       COALESCE(w.balance,0) AS coins,COALESCE(po.shirt_number,0) AS shirt_number,
       COALESCE(po.completed,CASE WHEN length(trim(COALESCE(p.ea_id,'')))>0 AND length(trim(COALESCE(p.position,'')))>0 THEN 1 ELSE 0 END) AS profile_completed
     FROM sessions s JOIN users u ON u.id=s.user_id LEFT JOIN profiles p ON p.user_id=u.id LEFT JOIN coin_wallets w ON w.user_id=u.id LEFT JOIN profile_onboarding po ON po.user_id=u.id
@@ -242,8 +251,79 @@ async function canClubPermission(db,user,clubId,permission){
   return Number(row?.allowed||0)===1;
 }
 
-async function logout(request,env){const db=requireDb(env),sid=cookieMap(request).epl_session;if(sid)await db.prepare('DELETE FROM sessions WHERE id=?').bind(sid).run();return json({ok:true},200,{'set-cookie':'epl_session=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0'})}
-async function me(request,env){const user=await currentUser(request,env);return user?json({user}):fail('Nicht angemeldet.',401)}
+async function heartbeat(request,env){
+  const db=requireDb(env),u=await requireUser(request,env);
+  await db.prepare(`UPDATE profiles SET last_seen_at=datetime('now') WHERE user_id=?`).bind(u.id).run();
+  return json({ok:true,online:true});
+}
+async function logout(request,env){
+  const db=requireDb(env),sid=cookieMap(request).epl_session;
+  if(sid){
+    const row=await db.prepare('SELECT user_id FROM sessions WHERE id=?').bind(sid).first();
+    if(row?.user_id)await db.prepare(`UPDATE profiles SET last_seen_at=datetime('now','-1 day') WHERE user_id=?`).bind(row.user_id).run();
+    await db.prepare('DELETE FROM sessions WHERE id=?').bind(sid).run();
+  }
+  return json({ok:true},200,{'set-cookie':'epl_session=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0'});
+}
+async function me(request,env){
+  const user=await currentUser(request,env);
+  if(!user)return fail('Nicht angemeldet.',401);
+  await requireDb(env).prepare(`UPDATE profiles SET last_seen_at=datetime('now') WHERE user_id=?`).bind(user.id).run();
+  return json({user});
+}
+
+async function socialState(request,env){
+  const db=requireDb(env),u=await requireUser(request,env);
+  const [players,clubs]=await Promise.all([
+    db.prepare(`SELECT lower(t.username) slug FROM follows f JOIN users t ON t.id=f.followed_user_id WHERE f.follower_user_id=?`).bind(u.id).all(),
+    db.prepare(`SELECT c.slug FROM club_follows f JOIN clubs c ON c.id=f.club_id WHERE f.user_id=?`).bind(u.id).all()
+  ]);
+  return json({following:[...(players.results||[]).map(x=>`player:${x.slug}`),...(clubs.results||[]).map(x=>`club:${x.slug}`)]});
+}
+async function socialFeed(request,env){
+  const db=requireDb(env),u=await requireUser(request,env);
+  const r=await db.prepare(`SELECT p.id,p.body,p.media_key,p.created_at,
+      CASE WHEN p.club_id IS NOT NULL THEN 'club' ELSE 'player' END author_type,
+      COALESCE(c.name,au.username) author_name,COALESCE(c.slug,lower(au.username)) author_slug,
+      CASE WHEN p.club_id IS NOT NULL THEN c.logo_key ELSE ap.avatar_key END author_image_key,
+      CASE WHEN p.club_id IS NULL AND ap.last_seen_at>=datetime('now','-2 minutes') THEN 1 ELSE 0 END author_online,
+      ((SELECT COUNT(*) FROM post_reactions pr WHERE pr.post_id=p.id)+(SELECT COUNT(*) FROM club_post_reactions cpr WHERE cpr.post_id=p.id)) reactions,
+      (SELECT COUNT(*) FROM comments cm WHERE cm.post_id=p.id) comments,
+      ((SELECT COUNT(*) FROM post_reactions pr WHERE pr.post_id=p.id AND pr.reaction='LIKE')+(SELECT COUNT(*) FROM club_post_reactions cpr WHERE cpr.post_id=p.id AND cpr.reaction='LIKE')) likes,
+      ((SELECT COUNT(*) FROM post_reactions pr WHERE pr.post_id=p.id AND pr.reaction='FIRE')+(SELECT COUNT(*) FROM club_post_reactions cpr WHERE cpr.post_id=p.id AND cpr.reaction='FIRE')) fires,
+      ((SELECT COUNT(*) FROM post_reactions pr WHERE pr.post_id=p.id AND pr.reaction='CLAP')+(SELECT COUNT(*) FROM club_post_reactions cpr WHERE cpr.post_id=p.id AND cpr.reaction='CLAP')) claps,
+      ((SELECT COUNT(*) FROM post_reactions pr WHERE pr.post_id=p.id AND pr.reaction='GOAL')+(SELECT COUNT(*) FROM club_post_reactions cpr WHERE cpr.post_id=p.id AND cpr.reaction='GOAL')) goals
+    FROM posts p
+    LEFT JOIN users au ON au.id=p.author_user_id LEFT JOIN profiles ap ON ap.user_id=au.id LEFT JOIN clubs c ON c.id=p.club_id
+    WHERE (p.author_user_id IN (SELECT followed_user_id FROM follows WHERE follower_user_id=?))
+       OR (p.club_id IN (SELECT club_id FROM club_follows WHERE user_id=?))
+    ORDER BY p.created_at DESC LIMIT 40`).bind(u.id,u.id).all();
+  return json({posts:r.results||[]});
+}
+async function getInventory(request,env){
+  const db=requireDb(env),u=await requireUser(request,env);
+  const [items,p]=await Promise.all([
+    db.prepare(`SELECT si.id,si.sku,si.name,si.category,si.description,si.price_coins,si.asset_key,si.rarity,ui.acquired_at
+      FROM user_inventory ui JOIN shop_items si ON si.id=ui.item_id WHERE ui.user_id=? ORDER BY ui.acquired_at DESC`).bind(u.id).all(),
+    db.prepare(`SELECT equipped_avatar_frame_id,equipped_cover_frame_id,equipped_name_effect_id FROM profiles WHERE user_id=?`).bind(u.id).first()
+  ]);
+  return json({items:items.results||[],equipped:{avatarFrame:p?.equipped_avatar_frame_id||null,coverFrame:p?.equipped_cover_frame_id||null,nameEffect:p?.equipped_name_effect_id||null}});
+}
+async function equipItem(request,env){
+  const db=requireDb(env),u=await requireUser(request,env),b=await request.json();
+  const slot=cleanText(b.slot,30),itemId=b.itemId===null||b.itemId===''?null:Number(b.itemId);
+  const slots={avatar_frame:{category:'AVATAR_FRAME',col:'equipped_avatar_frame_id'},cover_frame:{category:'COVER_FRAME',col:'equipped_cover_frame_id'},name_effect:{category:'NAME_EFFECT',col:'equipped_name_effect_id'}};
+  const cfg=slots[slot];if(!cfg)return fail('Ungültiger Cosmetic-Slot.');
+  if(itemId!==null){
+    if(!Number.isInteger(itemId)||itemId<=0)return fail('Ungültiges Shop-Item.');
+    const owned=await db.prepare(`SELECT si.id,si.category FROM user_inventory ui JOIN shop_items si ON si.id=ui.item_id WHERE ui.user_id=? AND ui.item_id=?`).bind(u.id,itemId).first();
+    if(!owned)return fail('Dieses Cosmetic befindet sich nicht in deinem Inventar.',403);
+    if(owned.category!==cfg.category)return fail('Dieses Cosmetic passt nicht in den gewählten Slot.',409);
+  }
+  await db.prepare(`UPDATE profiles SET ${cfg.col}=?,updated_at=datetime('now') WHERE user_id=?`).bind(itemId,u.id).run();
+  await db.prepare(`UPDATE user_inventory SET equipped=CASE WHEN item_id=? THEN 1 ELSE 0 END WHERE user_id=? AND item_id IN (SELECT id FROM shop_items WHERE category=?)`).bind(itemId||-1,u.id,cfg.category).run();
+  return getInventory(request,env);
+}
 
 async function follow(request,env){
   const db=requireDb(env),u=await requireUser(request,env),body=await request.json(),type=body.type,slug=cleanText(body.slug,60);
@@ -306,13 +386,18 @@ async function uploadMedia(request,env){
   const u=await requireUser(request,env);
   if(!env.MEDIA)return fail('R2 binding MEDIA fehlt.',503);
   const form=await request.formData(),file=form.get('file'),kind=String(form.get('kind')||'avatar');
-  const allowedKinds=['avatar','cover','club-logo','club-cover'];
+  const allowedKinds=['avatar','cover','club-logo','club-cover','post-media'];
   if(!allowedKinds.includes(kind))return fail('Ungültiger Bildtyp.');
   if(!(file instanceof File))return fail('Keine Datei übermittelt.');
   if(file.type!=='image/webp')return fail('Bilder müssen vor dem Upload als WebP optimiert werden.');
-  const maxBytes=(kind==='avatar'||kind==='club-logo')?600*1024:1200*1024;
+  const maxBytes=(kind==='avatar'||kind==='club-logo')?600*1024:(kind==='post-media'?1500*1024:1200*1024);
   if(file.size>maxBytes)return fail(`Optimiertes Bild ist zu groß. Maximal ${Math.round(maxBytes/1024)} KB erlaubt.`);
   const db=requireDb(env);let key,oldKey=null;
+  if(kind==='post-media'){
+    key=`posts/${u.id}/media-${crypto.randomUUID()}.webp`;
+    await env.MEDIA.put(key,file.stream(),{httpMetadata:{contentType:'image/webp',cacheControl:'public, max-age=31536000, immutable'},customMetadata:{kind,optimized:'client-webp'}});
+    return json({key,url:`/api/media/${encodeURIComponent(key)}`,contentType:'image/webp',bytes:file.size});
+  }
   if(kind==='club-logo'||kind==='club-cover'){
     const clubSlug=cleanText(form.get('clubSlug'),60);
     const club=await db.prepare('SELECT id,manager_user_id,logo_key,cover_key FROM clubs WHERE slug=?').bind(clubSlug).first();
@@ -337,6 +422,66 @@ async function uploadMedia(request,env){
 }
 async function getMedia(key,env){if(!env.MEDIA)return new Response('Not found',{status:404});key=decodeURIComponent(key);const obj=await env.MEDIA.get(key);if(!obj)return new Response('Not found',{status:404});const h=new Headers();obj.writeHttpMetadata(h);h.set('etag',obj.httpEtag);h.set('cache-control',h.get('cache-control')||'public, max-age=3600');return new Response(obj.body,{headers:h})}
 
+
+async function postReaction(route,request,env){
+  const db=requireDb(env),u=await requireUser(request,env),postId=Number(route.split('/')[1]),b=await request.json(),reaction=cleanText(b.reaction,10).toUpperCase(),asClubSlug=cleanText(b.asClubSlug,60);
+  if(!['LIKE','FIRE','CLAP','GOAL'].includes(reaction))return fail('Ungültige Reaktion.');
+  const post=await db.prepare('SELECT id FROM posts WHERE id=?').bind(postId).first();if(!post)return fail('Beitrag nicht gefunden.',404);
+  let mine=null;
+  if(asClubSlug){
+    const club=await db.prepare('SELECT id FROM clubs WHERE slug=?').bind(asClubSlug).first();if(!club)return fail('Club nicht gefunden.',404);
+    if(!(await canClubPermission(db,u,club.id,'manage_page')))return fail('Du darfst nicht als dieser Club reagieren.',403);
+    const existing=await db.prepare('SELECT reaction FROM club_post_reactions WHERE post_id=? AND club_id=?').bind(postId,club.id).first();
+    if(existing?.reaction===reaction)await db.prepare('DELETE FROM club_post_reactions WHERE post_id=? AND club_id=?').bind(postId,club.id).run();
+    else await db.prepare(`INSERT INTO club_post_reactions(post_id,club_id,user_id,reaction) VALUES(?,?,?,?) ON CONFLICT(post_id,club_id) DO UPDATE SET user_id=excluded.user_id,reaction=excluded.reaction,created_at=datetime('now')`).bind(postId,club.id,u.id,reaction).run();
+    const row=await db.prepare('SELECT reaction FROM club_post_reactions WHERE post_id=? AND club_id=?').bind(postId,club.id).first();mine=row?.reaction||null;
+  }else{
+    const existing=await db.prepare('SELECT reaction FROM post_reactions WHERE post_id=? AND user_id=?').bind(postId,u.id).first();
+    if(existing?.reaction===reaction)await db.prepare('DELETE FROM post_reactions WHERE post_id=? AND user_id=?').bind(postId,u.id).run();
+    else await db.prepare(`INSERT INTO post_reactions(post_id,user_id,reaction) VALUES(?,?,?) ON CONFLICT(post_id,user_id) DO UPDATE SET reaction=excluded.reaction,created_at=datetime('now')`).bind(postId,u.id,reaction).run();
+    const row=await db.prepare('SELECT reaction FROM post_reactions WHERE post_id=? AND user_id=?').bind(postId,u.id).first();mine=row?.reaction||null;
+  }
+  const counts=await db.prepare(`SELECT
+    (SELECT COUNT(*) FROM post_reactions WHERE post_id=?)+(SELECT COUNT(*) FROM club_post_reactions WHERE post_id=?) total,
+    (SELECT COUNT(*) FROM post_reactions WHERE post_id=? AND reaction='LIKE')+(SELECT COUNT(*) FROM club_post_reactions WHERE post_id=? AND reaction='LIKE') likes,
+    (SELECT COUNT(*) FROM post_reactions WHERE post_id=? AND reaction='FIRE')+(SELECT COUNT(*) FROM club_post_reactions WHERE post_id=? AND reaction='FIRE') fires,
+    (SELECT COUNT(*) FROM post_reactions WHERE post_id=? AND reaction='CLAP')+(SELECT COUNT(*) FROM club_post_reactions WHERE post_id=? AND reaction='CLAP') claps,
+    (SELECT COUNT(*) FROM post_reactions WHERE post_id=? AND reaction='GOAL')+(SELECT COUNT(*) FROM club_post_reactions WHERE post_id=? AND reaction='GOAL') goals`).bind(postId,postId,postId,postId,postId,postId,postId,postId,postId,postId).first();
+  return json({ok:true,counts:{total:Number(counts?.total||0),likes:Number(counts?.likes||0),fires:Number(counts?.fires||0),claps:Number(counts?.claps||0),goals:Number(counts?.goals||0)},mine,actor:asClubSlug?'club':'player'});
+}
+async function getPostComments(route,request,env){
+  const db=requireDb(env),postId=Number(route.split('/')[1]),viewer=await currentUser(request,env),viewerId=viewer?.id||0;
+  const post=await db.prepare('SELECT id FROM posts WHERE id=?').bind(postId).first();if(!post)return fail('Beitrag nicht gefunden.',404);
+  const r=await db.prepare(`SELECT c.id,c.parent_comment_id,c.body,c.created_at,c.actor_club_id,
+      COALESCE(ac.name,u.username) username,CASE WHEN c.actor_club_id IS NOT NULL THEN ac.logo_key ELSE p.avatar_key END avatar_key,
+      CASE WHEN c.actor_club_id IS NULL AND p.last_seen_at>=datetime('now','-2 minutes') THEN 1 ELSE 0 END is_online,
+      CASE WHEN c.actor_club_id IS NOT NULL THEN 'club' ELSE 'player' END author_type,
+      COALESCE(ac.slug,lower(u.username)) author_slug,
+      (SELECT COUNT(*) FROM comment_likes cl WHERE cl.comment_id=c.id) likes,
+      EXISTS(SELECT 1 FROM comment_likes cl WHERE cl.comment_id=c.id AND cl.user_id=?) liked_by_me
+    FROM comments c JOIN users u ON u.id=c.user_id LEFT JOIN profiles p ON p.user_id=u.id LEFT JOIN clubs ac ON ac.id=c.actor_club_id
+    WHERE c.post_id=? ORDER BY c.created_at ASC LIMIT 200`).bind(viewerId,postId).all();
+  return json({comments:r.results||[]});
+}
+async function createComment(route,request,env){
+  const db=requireDb(env),u=await requireUser(request,env),postId=Number(route.split('/')[1]),b=await request.json(),body=cleanText(b.body,1000),parentId=b.parentCommentId?Number(b.parentCommentId):null,asClubSlug=cleanText(b.asClubSlug,60);
+  if(!body)return fail('Kommentar ist leer.');
+  const post=await db.prepare('SELECT id FROM posts WHERE id=?').bind(postId).first();if(!post)return fail('Beitrag nicht gefunden.',404);
+  if(parentId){const parent=await db.prepare('SELECT id FROM comments WHERE id=? AND post_id=?').bind(parentId,postId).first();if(!parent)return fail('Antwort-Kommentar nicht gefunden.',404);}
+  let actorClubId=null;
+  if(asClubSlug){const club=await db.prepare('SELECT id FROM clubs WHERE slug=?').bind(asClubSlug).first();if(!club)return fail('Club nicht gefunden.',404);if(!(await canClubPermission(db,u,club.id,'manage_page')))return fail('Du darfst nicht als dieser Club kommentieren.',403);actorClubId=club.id;}
+  const r=await db.prepare('INSERT INTO comments(post_id,user_id,body,parent_comment_id,actor_club_id) VALUES(?,?,?,?,?)').bind(postId,u.id,body,parentId,actorClubId).run();
+  return json({ok:true,id:r.meta.last_row_id},201);
+}
+async function commentLike(route,request,env){
+  const db=requireDb(env),u=await requireUser(request,env),commentId=Number(route.split('/')[1]);
+  const c=await db.prepare('SELECT id FROM comments WHERE id=?').bind(commentId).first();if(!c)return fail('Kommentar nicht gefunden.',404);
+  const existing=await db.prepare('SELECT 1 FROM comment_likes WHERE comment_id=? AND user_id=?').bind(commentId,u.id).first();
+  if(existing)await db.prepare('DELETE FROM comment_likes WHERE comment_id=? AND user_id=?').bind(commentId,u.id).run();
+  else await db.prepare('INSERT INTO comment_likes(comment_id,user_id) VALUES(?,?)').bind(commentId,u.id).run();
+  const count=await db.prepare('SELECT COUNT(*) count FROM comment_likes WHERE comment_id=?').bind(commentId).first();
+  return json({liked:!existing,likes:Number(count?.count||0)});
+}
 
 async function createPost(request,env){const db=requireDb(env),u=await requireUser(request,env),b=await request.json(),body=cleanText(b.body,2000);if(!body)return fail('Beitrag ist leer.');let clubId=null;if(b.clubSlug){const c=await db.prepare('SELECT id,manager_user_id FROM clubs WHERE slug=?').bind(cleanText(b.clubSlug,60)).first();if(!c)return fail('Club nicht gefunden.',404);if(!(await canClubPermission(db,u,c.id,'manage_page')))return fail('Du darfst für diesen Club nicht posten.',403);clubId=c.id;}const r=await db.prepare('INSERT INTO posts(author_user_id,club_id,body,media_key,match_id) VALUES(?,?,?,?,?)').bind(clubId?null:u.id,clubId,body,cleanText(b.mediaKey,250)||null,b.matchId||null).run();return json({id:r.meta.last_row_id},201)}
 async function adminCoinAward(request,env){const db=requireDb(env),u=await requireAdminPermission(request,env,'coins'),b=await request.json(),amount=Math.trunc(Number(b.amount));if(!Number.isFinite(amount)||amount===0||Math.abs(amount)>10000)return fail('Ungültiger Coin-Betrag.');const target=await db.prepare('SELECT id,username FROM users WHERE username=? COLLATE NOCASE').bind(cleanText(b.username,24)).first();if(!target)return fail('Spieler nicht gefunden.',404);if(amount<0){const w=await db.prepare('SELECT balance FROM coin_wallets WHERE user_id=?').bind(target.id).first();if(!w||w.balance+amount<0)return fail('Wallet würde negativ werden.',409);}const ref=crypto.randomUUID();await db.batch([db.prepare('UPDATE coin_wallets SET balance=balance+?,lifetime_earned=lifetime_earned+CASE WHEN ?>0 THEN ? ELSE 0 END,lifetime_spent=lifetime_spent+CASE WHEN ?<0 THEN -? ELSE 0 END,updated_at=datetime(\'now\') WHERE user_id=?').bind(amount,amount,amount,amount,amount,target.id),db.prepare(`INSERT INTO coin_transactions(user_id,amount,type,reference_type,reference_id,description) VALUES(?,?,'ADMIN_ADJUSTMENT','ADMIN',?,?)`).bind(target.id,amount,ref,cleanText(b.description,200)||`Admin-Anpassung durch ${u.username}`)]);const w2=await db.prepare('SELECT balance FROM coin_wallets WHERE user_id=?').bind(target.id).first();return json({ok:true,balance:w2.balance})}
@@ -539,8 +684,9 @@ async function managerMatchStats(request,env){
 async function awardMatchCoins(db,m){const stats=await db.prepare('SELECT user_id,club_id,motm,clean_sheet FROM player_stats WHERE match_id=?').bind(m.id).all();const winner=m.home_score>m.away_score?m.home_club_id:m.away_score>m.home_score?m.away_club_id:null;for(const st of stats.results){let amount=0,parts=[];if(winner&&st.club_id===winner){amount+=150;parts.push('Siegbonus');}if(st.motm){amount+=100;parts.push('MOTM');}if(st.clean_sheet){amount+=75;parts.push('Clean Sheet');}if(!amount)continue;const exists=await db.prepare(`SELECT 1 FROM coin_transactions WHERE user_id=? AND type='PERFORMANCE' AND reference_type='MATCH' AND reference_id=?`).bind(st.user_id,String(m.id)).first();if(exists)continue;await db.batch([db.prepare('UPDATE coin_wallets SET balance=balance+?,lifetime_earned=lifetime_earned+?,updated_at=datetime(\'now\') WHERE user_id=?').bind(amount,amount,st.user_id),db.prepare(`INSERT INTO coin_transactions(user_id,amount,type,reference_type,reference_id,description) VALUES(?,?,'PERFORMANCE','MATCH',?,?)`).bind(st.user_id,amount,String(m.id),parts.join(' + '))]);}}
 async function eaClubInfo(request,env){const u=new URL(request.url),clubId=(u.searchParams.get('clubId')||'').trim(),platform=(u.searchParams.get('platform')||'common-gen5').trim();if(!/^\d{1,12}$/.test(clubId))return fail('Ungültige EA Club ID.');if(!['common-gen5','common-gen4'].includes(platform))return fail('Ungültige Plattform.');const target=`https://proclubs.ea.com/api/fc/clubs/info?platform=${encodeURIComponent(platform)}&clubIds=${encodeURIComponent(clubId)}`;const res=await fetch(target,{headers:{accept:'application/json','user-agent':'EPL-Elite-Pro-League/1.0'},signal:AbortSignal.timeout(9000)});if(!res.ok)return fail(`EA Clubs antwortet mit HTTP ${res.status}.`,502);const data=await res.json();return json({provider:'EA Clubs',clubId,platform,data});}
 async function getProfile(slug,request,env){
-  const db=requireDb(env);
+  const db=requireDb(env),viewer=await currentUser(request,env);
   const p=await db.prepare(`SELECT u.id,u.username,u.role,p.*,COALESCE(po.shirt_number,0) shirt_number,COALESCE(w.balance,0) coins,
+    CASE WHEN p.last_seen_at>=datetime('now','-2 minutes') THEN 1 ELSE 0 END is_online,
     (SELECT COUNT(*) FROM follows WHERE followed_user_id=u.id) followers,
     (SELECT COUNT(*) FROM follows WHERE follower_user_id=u.id) following,
     c.id club_id,c.name club,c.slug club_slug,cm.role club_role
@@ -548,16 +694,24 @@ async function getProfile(slug,request,env){
     LEFT JOIN club_members cm ON cm.user_id=u.id AND cm.left_at IS NULL LEFT JOIN clubs c ON c.id=cm.club_id
     WHERE lower(u.username)=?`).bind(slug.toLowerCase()).first();
   if(!p)return fail('Spieler nicht gefunden.',404);
-  const [stats,posts,recentMatches,achievements]=await Promise.all([
+  const [stats,posts,recentMatches,achievements,clubHistory]=await Promise.all([
     db.prepare(`SELECT COUNT(*) matches,COALESCE(SUM(goals),0) goals,COALESCE(SUM(assists),0) assists,ROUND(AVG(rating),2) rating,
       COALESCE(SUM(saves),0) saves,COALESCE(SUM(motm),0) motm FROM player_stats WHERE user_id=?`).bind(p.id).first(),
-    db.prepare(`SELECT p.id,p.body,p.media_key,p.created_at,(SELECT COUNT(*) FROM post_likes pl WHERE pl.post_id=p.id) likes,(SELECT COUNT(*) FROM comments c WHERE c.post_id=p.id) comments FROM posts p WHERE p.author_user_id=? ORDER BY p.created_at DESC LIMIT 10`).bind(p.id).all(),
+    db.prepare(`SELECT p.id,p.body,p.media_key,p.created_at,((SELECT COUNT(*) FROM post_reactions pr WHERE pr.post_id=p.id)+(SELECT COUNT(*) FROM club_post_reactions cpr WHERE cpr.post_id=p.id)) reactions,
+      ((SELECT COUNT(*) FROM post_reactions pr WHERE pr.post_id=p.id AND pr.reaction='LIKE')+(SELECT COUNT(*) FROM club_post_reactions cpr WHERE cpr.post_id=p.id AND cpr.reaction='LIKE')) likes,
+      ((SELECT COUNT(*) FROM post_reactions pr WHERE pr.post_id=p.id AND pr.reaction='FIRE')+(SELECT COUNT(*) FROM club_post_reactions cpr WHERE cpr.post_id=p.id AND cpr.reaction='FIRE')) fires,
+      ((SELECT COUNT(*) FROM post_reactions pr WHERE pr.post_id=p.id AND pr.reaction='CLAP')+(SELECT COUNT(*) FROM club_post_reactions cpr WHERE cpr.post_id=p.id AND cpr.reaction='CLAP')) claps,
+      ((SELECT COUNT(*) FROM post_reactions pr WHERE pr.post_id=p.id AND pr.reaction='GOAL')+(SELECT COUNT(*) FROM club_post_reactions cpr WHERE cpr.post_id=p.id AND cpr.reaction='GOAL')) goals,
+      (SELECT COUNT(*) FROM comments c WHERE c.post_id=p.id) comments FROM posts p WHERE p.author_user_id=? ORDER BY p.created_at DESC LIMIT 30`).bind(p.id).all(),
     db.prepare(`SELECT m.id,m.scheduled_at,m.home_score,m.away_score,m.status,h.name home_name,a.name away_name,ps.goals,ps.assists,ps.saves,ps.rating,ps.motm
       FROM player_stats ps JOIN matches m ON m.id=ps.match_id JOIN clubs h ON h.id=m.home_club_id JOIN clubs a ON a.id=m.away_club_id
-      WHERE ps.user_id=? ORDER BY m.scheduled_at DESC LIMIT 8`).bind(p.id).all(),
-    db.prepare(`SELECT id,title,subtitle,icon_key,awarded_at FROM player_achievements WHERE user_id=? ORDER BY awarded_at DESC LIMIT 8`).bind(p.id).all()
+      WHERE ps.user_id=? ORDER BY m.scheduled_at DESC LIMIT 20`).bind(p.id).all(),
+    db.prepare(`SELECT id,title,subtitle,icon_key,awarded_at FROM player_achievements WHERE user_id=? ORDER BY awarded_at DESC LIMIT 20`).bind(p.id).all(),
+    db.prepare(`SELECT c.name,c.slug,cm.role,cm.joined_at,cm.left_at FROM club_members cm JOIN clubs c ON c.id=cm.club_id WHERE cm.user_id=? ORDER BY cm.joined_at DESC`).bind(p.id).all()
   ]);
-  return json({profile:p,stats:stats||{},posts:posts.results||[],recentMatches:recentMatches.results||[],achievements:achievements.results||[]});
+  let inventory=[];
+  if(viewer?.id===p.id){const inv=await db.prepare(`SELECT si.id,si.name,si.category,si.description,si.rarity,si.asset_key,ui.acquired_at FROM user_inventory ui JOIN shop_items si ON si.id=ui.item_id WHERE ui.user_id=? ORDER BY ui.acquired_at DESC`).bind(p.id).all();inventory=inv.results||[];}
+  return json({profile:p,stats:stats||{},posts:posts.results||[],recentMatches:recentMatches.results||[],achievements:achievements.results||[],clubHistory:clubHistory.results||[],inventory});
 }
 async function getClub(slug,request,env){
   const db=requireDb(env);
@@ -565,10 +719,10 @@ async function getClub(slug,request,env){
     FROM clubs c LEFT JOIN users u ON u.id=c.manager_user_id LEFT JOIN divisions d ON d.id=c.division_id LEFT JOIN club_details cd ON cd.club_id=c.id WHERE c.slug=?`).bind(slug).first();
   if(!c)return fail('Club nicht gefunden.',404);
   const [squad,posts,recentMatches,upcomingMatches,transfers,achievements,topPlayers]=await Promise.all([
-    db.prepare(`SELECT u.id,u.username,cm.role,COALESCE(cm.shirt_number,po.shirt_number) shirt_number,p.position,p.overall,p.avatar_key,p.country
+    db.prepare(`SELECT u.id,u.username,cm.role,COALESCE(cm.shirt_number,po.shirt_number) shirt_number,p.position,p.overall,p.avatar_key,p.country,CASE WHEN p.last_seen_at>=datetime('now','-2 minutes') THEN 1 ELSE 0 END is_online
       FROM club_members cm JOIN users u ON u.id=cm.user_id LEFT JOIN profiles p ON p.user_id=u.id LEFT JOIN profile_onboarding po ON po.user_id=u.id
       WHERE cm.club_id=? AND cm.left_at IS NULL ORDER BY CASE cm.role WHEN 'MANAGER' THEN 0 WHEN 'CO_MANAGER' THEN 1 WHEN 'CAPTAIN' THEN 2 ELSE 3 END,u.username`).bind(c.id).all(),
-    db.prepare(`SELECT p.id,p.body,p.media_key,p.created_at,(SELECT COUNT(*) FROM post_likes pl WHERE pl.post_id=p.id) likes,(SELECT COUNT(*) FROM comments cm WHERE cm.post_id=p.id) comments FROM posts p WHERE p.club_id=? ORDER BY p.created_at DESC LIMIT 10`).bind(c.id).all(),
+    db.prepare(`SELECT p.id,p.body,p.media_key,p.created_at,((SELECT COUNT(*) FROM post_reactions pr WHERE pr.post_id=p.id)+(SELECT COUNT(*) FROM club_post_reactions cpr WHERE cpr.post_id=p.id)) reactions,((SELECT COUNT(*) FROM post_reactions pr WHERE pr.post_id=p.id AND pr.reaction='LIKE')+(SELECT COUNT(*) FROM club_post_reactions cpr WHERE cpr.post_id=p.id AND cpr.reaction='LIKE')) likes,((SELECT COUNT(*) FROM post_reactions pr WHERE pr.post_id=p.id AND pr.reaction='FIRE')+(SELECT COUNT(*) FROM club_post_reactions cpr WHERE cpr.post_id=p.id AND cpr.reaction='FIRE')) fires,((SELECT COUNT(*) FROM post_reactions pr WHERE pr.post_id=p.id AND pr.reaction='CLAP')+(SELECT COUNT(*) FROM club_post_reactions cpr WHERE cpr.post_id=p.id AND cpr.reaction='CLAP')) claps,((SELECT COUNT(*) FROM post_reactions pr WHERE pr.post_id=p.id AND pr.reaction='GOAL')+(SELECT COUNT(*) FROM club_post_reactions cpr WHERE cpr.post_id=p.id AND cpr.reaction='GOAL')) goals,(SELECT COUNT(*) FROM comments cm WHERE cm.post_id=p.id) comments FROM posts p WHERE p.club_id=? ORDER BY p.created_at DESC LIMIT 10`).bind(c.id).all(),
     db.prepare(`SELECT m.id,m.scheduled_at,m.home_score,m.away_score,m.status,h.name home_name,a.name away_name FROM matches m JOIN clubs h ON h.id=m.home_club_id JOIN clubs a ON a.id=m.away_club_id WHERE (m.home_club_id=? OR m.away_club_id=?) AND m.status='CONFIRMED' ORDER BY m.scheduled_at DESC LIMIT 6`).bind(c.id,c.id).all(),
     db.prepare(`SELECT m.id,m.scheduled_at,m.status,h.name home_name,a.name away_name FROM matches m JOIN clubs h ON h.id=m.home_club_id JOIN clubs a ON a.id=m.away_club_id WHERE (m.home_club_id=? OR m.away_club_id=?) AND m.status IN ('SCHEDULED','SUBMITTED') ORDER BY m.scheduled_at ASC LIMIT 6`).bind(c.id,c.id).all(),
     db.prepare(`SELECT t.id,t.type,t.occurred_at,u.username player,fc.name from_club,tc.name to_club FROM transfers t JOIN users u ON u.id=t.user_id LEFT JOIN clubs fc ON fc.id=t.from_club_id LEFT JOIN clubs tc ON tc.id=t.to_club_id WHERE t.from_club_id=? OR t.to_club_id=? ORDER BY t.occurred_at DESC LIMIT 8`).bind(c.id,c.id).all(),
@@ -584,7 +738,7 @@ async function getFixtures(env){const db=requireDb(env);const r=await db.prepare
 
 async function listPlayers(env){
   const db=requireDb(env);
-  const r=await db.prepare(`SELECT u.username,lower(u.username) slug,p.position,p.secondary_position,p.country,p.avatar_key,p.overall,COALESCE(c.name,'Free Agent') club,COALESCE((SELECT COUNT(*) FROM player_stats ps WHERE ps.user_id=u.id),0) matches,COALESCE((SELECT SUM(ps.goals) FROM player_stats ps WHERE ps.user_id=u.id),0) goals,COALESCE((SELECT SUM(ps.assists) FROM player_stats ps WHERE ps.user_id=u.id),0) assists,COALESCE(ROUND((SELECT AVG(ps.rating) FROM player_stats ps WHERE ps.user_id=u.id),2),COALESCE(p.overall,0)) rating FROM users u LEFT JOIN profiles p ON p.user_id=u.id LEFT JOIN profile_onboarding po ON po.user_id=u.id LEFT JOIN club_members cm ON cm.user_id=u.id AND cm.left_at IS NULL LEFT JOIN clubs c ON c.id=cm.club_id WHERE u.status='ACTIVE' AND COALESCE(po.completed,CASE WHEN length(trim(COALESCE(p.ea_id,'')))>0 AND length(trim(COALESCE(p.position,'')))>0 THEN 1 ELSE 0 END)=1 ORDER BY COALESCE((SELECT SUM(ps.goals) FROM player_stats ps WHERE ps.user_id=u.id),0) DESC, u.created_at DESC`).all();
+  const r=await db.prepare(`SELECT u.username,lower(u.username) slug,p.position,p.secondary_position,p.country,p.avatar_key,p.overall,CASE WHEN p.last_seen_at>=datetime('now','-2 minutes') THEN 1 ELSE 0 END is_online,p.equipped_avatar_frame_id,p.equipped_name_effect_id,COALESCE(c.name,'Free Agent') club,COALESCE((SELECT COUNT(*) FROM player_stats ps WHERE ps.user_id=u.id),0) matches,COALESCE((SELECT SUM(ps.goals) FROM player_stats ps WHERE ps.user_id=u.id),0) goals,COALESCE((SELECT SUM(ps.assists) FROM player_stats ps WHERE ps.user_id=u.id),0) assists,COALESCE(ROUND((SELECT AVG(ps.rating) FROM player_stats ps WHERE ps.user_id=u.id),2),COALESCE(p.overall,0)) rating FROM users u LEFT JOIN profiles p ON p.user_id=u.id LEFT JOIN profile_onboarding po ON po.user_id=u.id LEFT JOIN club_members cm ON cm.user_id=u.id AND cm.left_at IS NULL LEFT JOIN clubs c ON c.id=cm.club_id WHERE u.status='ACTIVE' AND COALESCE(po.completed,CASE WHEN length(trim(COALESCE(p.ea_id,'')))>0 AND length(trim(COALESCE(p.position,'')))>0 THEN 1 ELSE 0 END)=1 ORDER BY COALESCE((SELECT SUM(ps.goals) FROM player_stats ps WHERE ps.user_id=u.id),0) DESC, u.created_at DESC`).all();
   return json({players:r.results});
 }
 async function listClubs(env){
@@ -607,7 +761,7 @@ async function getBootstrap(env){
   const [news,fixtures,players,clubs,transfers,standings]=await Promise.all([
     db.prepare(`SELECT id,slug,title,excerpt,image_key,published_at FROM news WHERE status='PUBLISHED' ORDER BY COALESCE(published_at,created_at) DESC LIMIT 3`).all(),
     db.prepare(`SELECT m.id,m.scheduled_at,m.status,h.name home_name,h.slug home_slug,a.name away_name,a.slug away_slug,d.name division_name FROM matches m JOIN clubs h ON h.id=m.home_club_id JOIN clubs a ON a.id=m.away_club_id JOIN divisions d ON d.id=m.division_id ORDER BY scheduled_at ASC LIMIT 6`).all(),
-    db.prepare(`SELECT u.username,lower(u.username) slug,p.position,p.country,p.avatar_key,COALESCE(c.name,'Free Agent') club,COALESCE((SELECT SUM(ps.goals) FROM player_stats ps WHERE ps.user_id=u.id),0) goals,COALESCE((SELECT SUM(ps.assists) FROM player_stats ps WHERE ps.user_id=u.id),0) assists,COALESCE((SELECT COUNT(*) FROM player_stats ps WHERE ps.user_id=u.id),0) matches,COALESCE(ROUND((SELECT AVG(ps.rating) FROM player_stats ps WHERE ps.user_id=u.id),2),COALESCE(p.overall,0)) rating FROM users u LEFT JOIN profiles p ON p.user_id=u.id LEFT JOIN profile_onboarding po ON po.user_id=u.id LEFT JOIN club_members cm ON cm.user_id=u.id AND cm.left_at IS NULL LEFT JOIN clubs c ON c.id=cm.club_id WHERE u.status='ACTIVE' AND COALESCE(po.completed,CASE WHEN length(trim(COALESCE(p.ea_id,'')))>0 AND length(trim(COALESCE(p.position,'')))>0 THEN 1 ELSE 0 END)=1 ORDER BY goals DESC,matches DESC LIMIT 6`).all(),
+    db.prepare(`SELECT u.username,lower(u.username) slug,p.position,p.country,p.avatar_key,p.equipped_avatar_frame_id,p.equipped_name_effect_id,CASE WHEN p.last_seen_at>=datetime('now','-2 minutes') THEN 1 ELSE 0 END is_online,COALESCE(c.name,'Free Agent') club,COALESCE((SELECT SUM(ps.goals) FROM player_stats ps WHERE ps.user_id=u.id),0) goals,COALESCE((SELECT SUM(ps.assists) FROM player_stats ps WHERE ps.user_id=u.id),0) assists,COALESCE((SELECT COUNT(*) FROM player_stats ps WHERE ps.user_id=u.id),0) matches,COALESCE(ROUND((SELECT AVG(ps.rating) FROM player_stats ps WHERE ps.user_id=u.id),2),COALESCE(p.overall,0)) rating FROM users u LEFT JOIN profiles p ON p.user_id=u.id LEFT JOIN profile_onboarding po ON po.user_id=u.id LEFT JOIN club_members cm ON cm.user_id=u.id AND cm.left_at IS NULL LEFT JOIN clubs c ON c.id=cm.club_id WHERE u.status='ACTIVE' AND COALESCE(po.completed,CASE WHEN length(trim(COALESCE(p.ea_id,'')))>0 AND length(trim(COALESCE(p.position,'')))>0 THEN 1 ELSE 0 END)=1 ORDER BY goals DESC,matches DESC LIMIT 6`).all(),
     db.prepare(`SELECT c.name,c.slug,c.logo_key,c.reputation,c.followers_count,COALESCE(d.name,'Ohne Division') division,u.username manager FROM clubs c LEFT JOIN divisions d ON d.id=c.division_id LEFT JOIN users u ON u.id=c.manager_user_id ORDER BY c.created_at DESC LIMIT 8`).all(),
     db.prepare(`SELECT t.id,t.type,t.occurred_at AS created_at,u.username player,p.position,p.overall rating,fc.name from_club,tc.name to_club FROM transfers t LEFT JOIN users u ON u.id=t.user_id LEFT JOIN profiles p ON p.user_id=t.user_id LEFT JOIN clubs fc ON fc.id=t.from_club_id LEFT JOIN clubs tc ON tc.id=t.to_club_id ORDER BY t.occurred_at DESC LIMIT 6`).all(),
     db.prepare(`WITH stats AS (SELECT sc.club_id,COUNT(m.id) played,SUM(CASE WHEN (m.home_club_id=sc.club_id AND m.home_score>m.away_score) OR (m.away_club_id=sc.club_id AND m.away_score>m.home_score) THEN 1 ELSE 0 END) wins,SUM(CASE WHEN m.home_score=m.away_score THEN 1 ELSE 0 END) draws,SUM(CASE WHEN (m.home_club_id=sc.club_id AND m.home_score<m.away_score) OR (m.away_club_id=sc.club_id AND m.away_score<m.home_score) THEN 1 ELSE 0 END) losses,SUM(CASE WHEN m.home_club_id=sc.club_id THEN m.home_score ELSE m.away_score END) gf,SUM(CASE WHEN m.home_club_id=sc.club_id THEN m.away_score ELSE m.home_score END) ga FROM season_clubs sc LEFT JOIN matches m ON m.season_id=sc.season_id AND (m.home_club_id=sc.club_id OR m.away_club_id=sc.club_id) AND m.status='CONFIRMED' WHERE sc.season_id=1 GROUP BY sc.club_id) SELECT c.id,c.name,c.slug,COALESCE(s.played,0) played,COALESCE(s.wins,0) wins,COALESCE(s.draws,0) draws,COALESCE(s.losses,0) losses,COALESCE(s.gf,0) gf,COALESCE(s.ga,0) ga,(COALESCE(s.wins,0)*3+COALESCE(s.draws,0)) points FROM clubs c JOIN season_clubs sc ON sc.club_id=c.id AND sc.season_id=1 LEFT JOIN stats s ON s.club_id=c.id ORDER BY points DESC,(gf-ga) DESC,gf DESC LIMIT 6`).all()
