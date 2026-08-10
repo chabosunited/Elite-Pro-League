@@ -2,7 +2,7 @@
 
 Cloudflare-Pages-Projekt für eine EA FC Pro Clubs Online Liga mit D1, R2, Google/Discord OAuth, Spielerprofilen, Clubs, Verträgen, Tabellen, Spielplan, News, Shop und Admin-/Manager-Bereichen.
 
-## Authentifizierung.
+## Authentifizierung
 
 Diese Version verwendet **Google + Discord OAuth 2.0** statt eigener EPL-Passwörter.
 
