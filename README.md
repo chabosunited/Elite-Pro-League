@@ -2,7 +2,7 @@
 
 Komplette Starter-Plattform für eine Pro-Clubs-Online-Liga im Look der gelieferten Referenzen.
 
-## Enthalten
+## Enthalten.
 
 ### Frontend
 - EPL Homepage im dunklen Blau/Schwarz-Esports-Look
