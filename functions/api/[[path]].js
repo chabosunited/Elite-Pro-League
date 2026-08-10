@@ -54,7 +54,7 @@ export async function onRequest(context){
     if(route === 'profile' && method === 'POST') return updateProfile(request,env);
     if(route.startsWith('profile/') && method === 'GET') return getProfile(route.slice(8),request,env);
     if(route.startsWith('club/') && method === 'GET') return getClub(route.slice(5),request,env);
-    if(route === 'standings' && method === 'GET') return getStandings(env);
+    if(route === 'standings' && method === 'GET') return getStandings(request,env);
     if(route === 'fixtures' && method === 'GET') return getFixtures(env);
     if(route === 'wallet' && method === 'GET') return getWallet(request,env);
     if(route === 'ea/club-info' && method === 'GET') return eaClubInfo(request,env);
@@ -89,6 +89,8 @@ export async function onRequest(context){
     if(route === 'admin/season/save' && method === 'POST') return adminSeasonSave(request,env);
     if(route === 'admin/division/save' && method === 'POST') return adminDivisionSave(request,env);
     if(route === 'admin/match/save' && method === 'POST') return adminMatchSave(request,env);
+    if(route === 'admin/matches/generate' && method === 'POST') return adminGenerateMatches(request,env);
+    if(route === 'admin/match/detail' && method === 'GET') return adminMatchDetail(request,env);
     if(route === 'admin/match/result' && method === 'POST') return adminMatchResult(request,env);
     if(route === 'admin/news/save' && method === 'POST') return adminNewsSave(request,env);
     if(route === 'admin/transfer/save' && method === 'POST') return adminTransferSave(request,env);
@@ -108,6 +110,9 @@ export async function onRequest(context){
     if(route === 'manager/player/remove' && method === 'POST') return managerPlayerRemove(request,env);
     if(route === 'manager/application/action' && method === 'POST') return managerApplicationAction(request,env);
     if(route === 'manager/match/stats' && method === 'POST') return managerMatchStats(request,env);
+    if(route === 'manager/match/stats-batch' && method === 'POST') return managerMatchStatsBatch(request,env);
+    if(route === 'manager/match/schedule' && method === 'POST') return managerMatchSchedule(request,env);
+    if(route === 'coins/gift' && method === 'POST') return giftCoins(request,env);
     if(route === 'manager/goals/select' && method === 'POST') return selectClubGoals(request,env);
     if(/^matches\/\d+\/submit$/.test(route) && method === 'POST') return submitMatch(route,request,env);
     if(/^matches\/\d+\/confirm$/.test(route) && method === 'POST') return confirmMatch(route,request,env);
@@ -479,10 +484,8 @@ async function follow(request,env){
 }
 
 async function createClub(request,env){
-  const db=requireDb(env),u=await requireUser(request,env),b=await request.json(),name=cleanText(b.name,50),slug=slugify(name);if(name.length<3)return fail('Clubname ist zu kurz.');
-  const active=await db.prepare('SELECT 1 FROM club_members WHERE user_id=? AND left_at IS NULL').bind(u.id).first();if(active)return fail('Du bist bereits Mitglied eines aktiven Clubs.',409);
-  const result=await db.prepare('INSERT INTO clubs(name,slug,manager_user_id,ea_club_id,platform,reputation) VALUES(?,?,?,?,?,1000)').bind(name,slug,u.id,cleanText(b.eaClubId,50),cleanText(b.platform,30)).run();const id=result.meta.last_row_id;
-  await db.batch([db.prepare(`INSERT INTO club_members(club_id,user_id,role) VALUES(?,?,'MANAGER')`).bind(id,u.id),db.prepare(`UPDATE users SET role=CASE WHEN role='PLAYER' THEN 'MANAGER' ELSE role END WHERE id=?`).bind(u.id)]);return json({club:{id,name,slug}},201);
+  await requireUser(request,env);
+  return fail('Clubs können nur von EPL-Admins angelegt werden. Ein Admin weist dir einen Club als Vereinsmanager zu.',403);
 }
 async function createApplication(request,env){const db=requireDb(env),u=await requireUser(request,env),b=await request.json();const club=await db.prepare('SELECT id FROM clubs WHERE slug=?').bind(cleanText(b.clubSlug,60)).first();if(!club)return fail('Club nicht gefunden.',404);const existing=await db.prepare(`SELECT 1 FROM applications WHERE user_id=? AND club_id=? AND status='OPEN'`).bind(u.id,club.id).first();if(existing)return fail('Du hast bereits eine offene Bewerbung.',409);const r=await db.prepare('INSERT INTO applications(user_id,club_id,message) VALUES(?,?,?)').bind(u.id,club.id,cleanText(b.message,1000)).run();return json({id:r.meta.last_row_id,status:'OPEN'},201)}
 async function createContract(request,env){const db=requireDb(env),u=await requireUser(request,env),b=await request.json();const club=await db.prepare('SELECT id,manager_user_id FROM clubs WHERE slug=?').bind(cleanText(b.clubSlug,60)).first();if(!club)return fail('Club nicht gefunden.',404);if(!(await canClubPermission(db,u,club.id,'manage_page')))return fail('Du verwaltest diesen Club nicht.',403);const player=await db.prepare('SELECT id FROM users WHERE username=? COLLATE NOCASE').bind(cleanText(b.username,24)).first();if(!player)return fail('Spieler nicht gefunden.',404);const r=await db.prepare('INSERT INTO contracts(club_id,user_id,offered_by,starts_at,ends_at,message) VALUES(?,?,?,?,?,?)').bind(club.id,player.id,u.id,b.startsAt||null,b.endsAt||null,cleanText(b.message,800)).run();return json({id:r.meta.last_row_id,status:'OFFERED'},201)}
@@ -509,7 +512,7 @@ async function purchaseItem(request,env){
   await db.batch(stmts);
   return json({ok:true,balance:wallet.balance-item.price_coins});
 }
-async function getWallet(request,env){const db=requireDb(env),u=await requireUser(request,env);const wallet=await db.prepare('SELECT * FROM coin_wallets WHERE user_id=?').bind(u.id).first();const tx=await db.prepare('SELECT amount,type,description,created_at FROM coin_transactions WHERE user_id=? ORDER BY created_at DESC LIMIT 30').bind(u.id).all();return json({wallet,transactions:tx.results})}
+async function getWallet(request,env){const db=requireDb(env),u=await requireUser(request,env);const wallet=await db.prepare('SELECT * FROM coin_wallets WHERE user_id=?').bind(u.id).first();const tx=await db.prepare('SELECT amount,type,description,created_at FROM coin_transactions WHERE user_id=? ORDER BY created_at DESC LIMIT 30').bind(u.id).all();const gifts=await db.prepare(`SELECT cg.amount,cg.created_at,cg.sender_user_id,cg.recipient_user_id,su.username sender_name,ru.username recipient_name,sc.name sender_club,rc.name recipient_club FROM coin_gifts cg LEFT JOIN users su ON su.id=cg.sender_user_id LEFT JOIN users ru ON ru.id=cg.recipient_user_id LEFT JOIN clubs sc ON sc.id=cg.sender_club_id LEFT JOIN clubs rc ON rc.id=cg.recipient_club_id WHERE cg.sender_user_id=? OR cg.recipient_user_id=? ORDER BY cg.created_at DESC LIMIT 30`).bind(u.id,u.id).all();return json({wallet,transactions:tx.results||[],gifts:gifts.results||[]})}
 
 async function createCheckout(request,env){
   const db=requireDb(env),u=await requireUser(request,env);
@@ -676,7 +679,11 @@ async function submitMatch(route,request,env){
   const canHome=await canClubPermission(db,u,m.home_club_id,'submit_results'),canAway=await canClubPermission(db,u,m.away_club_id,'submit_results');
   if(!canHome&&!canAway)return fail('Du darfst für keinen beteiligten Club Ergebnisse melden.',403);
   const hs=Math.trunc(Number(b.homeScore)),as=Math.trunc(Number(b.awayScore));if(hs<0||as<0||hs>99||as>99)return fail('Ungültiges Ergebnis.');
-  await db.prepare(`UPDATE matches SET home_score=?,away_score=?,status='SUBMITTED',submitted_by=?,notes=?,updated_at=datetime('now') WHERE id=?`).bind(hs,as,u.id,cleanText(b.notes,500),id).run();
+  const clubId=canHome?m.home_club_id:m.away_club_id;
+  await db.batch([
+    db.prepare(`UPDATE matches SET home_score=?,away_score=?,status='SUBMITTED',submitted_by=?,notes=?,updated_at=datetime('now') WHERE id=?`).bind(hs,as,u.id,cleanText(b.notes,500),id),
+    db.prepare(`INSERT INTO match_club_submissions(match_id,club_id,submitted_by,result_submitted_at,updated_at) VALUES(?,?,?,datetime('now'),datetime('now')) ON CONFLICT(match_id,club_id) DO UPDATE SET submitted_by=excluded.submitted_by,result_submitted_at=excluded.result_submitted_at,updated_at=datetime('now')`).bind(id,clubId,u.id)
+  ]);
   return json({ok:true,status:'SUBMITTED'});
 }
 async function confirmMatch(route,request,env){
@@ -751,7 +758,7 @@ async function adminOverview(request,env){
       cd.bio,cd.discord,cd.website,COALESCE(cw.balance,0) club_coins FROM clubs c LEFT JOIN users u ON u.id=c.manager_user_id LEFT JOIN divisions d ON d.id=c.division_id LEFT JOIN club_details cd ON cd.club_id=c.id LEFT JOIN club_coin_wallets cw ON cw.club_id=c.id ORDER BY c.created_at DESC`).all(),
     db.prepare(`SELECT * FROM seasons ORDER BY id DESC`).all(),
     db.prepare(`SELECT d.*,s.name season_name FROM divisions d JOIN seasons s ON s.id=d.season_id ORDER BY d.season_id DESC,d.level ASC`).all(),
-    db.prepare(`SELECT m.*,h.name home_name,a.name away_name,s.name season_name,d.name division_name FROM matches m JOIN clubs h ON h.id=m.home_club_id JOIN clubs a ON a.id=m.away_club_id JOIN seasons s ON s.id=m.season_id JOIN divisions d ON d.id=m.division_id ORDER BY m.scheduled_at DESC LIMIT 100`).all(),
+    db.prepare(`SELECT m.*,h.name home_name,a.name away_name,s.name season_name,d.name division_name FROM matches m JOIN clubs h ON h.id=m.home_club_id JOIN clubs a ON a.id=m.away_club_id JOIN seasons s ON s.id=m.season_id JOIN divisions d ON d.id=m.division_id ORDER BY m.season_id DESC,m.division_id ASC,m.matchday ASC,CASE WHEN m.scheduled_at='' THEN 1 ELSE 0 END,m.scheduled_at ASC LIMIT 500`).all(),
     db.prepare(`SELECT n.id,n.slug,n.title,n.excerpt,n.body,n.image_key,n.status,n.published_at,n.created_at,u.username author FROM news n LEFT JOIN users u ON u.id=n.author_user_id ORDER BY n.created_at DESC LIMIT 100`).all(),
     db.prepare(`SELECT t.id,t.type,t.occurred_at,u.username player,fc.name from_club,tc.name to_club FROM transfers t JOIN users u ON u.id=t.user_id LEFT JOIN clubs fc ON fc.id=t.from_club_id LEFT JOIN clubs tc ON tc.id=t.to_club_id ORDER BY t.occurred_at DESC LIMIT 100`).all()
   ]);
@@ -805,6 +812,15 @@ async function adminClubSave(request,env){
     const r=await db.prepare(`INSERT INTO clubs(name,slug,ea_club_id,platform,division_id,reputation,verified) VALUES(?,?,?,?,?,?,?)`).bind(name,slug,cleanText(b.eaClubId,50),cleanText(b.platform,30),divisionId,rep,bool01(b.verified)).run();clubId=r.meta.last_row_id;
   }
   await db.prepare(`INSERT INTO club_details(club_id,bio,discord,website,updated_at) VALUES(?,?,?,?,datetime('now')) ON CONFLICT(club_id) DO UPDATE SET bio=excluded.bio,discord=excluded.discord,website=excluded.website,updated_at=datetime('now')`).bind(clubId,cleanText(b.bio,1000),cleanText(b.discord,120),cleanText(b.website,250)).run();
+  if(divisionId){
+    const div=await db.prepare('SELECT season_id FROM divisions WHERE id=?').bind(divisionId).first();
+    if(div){
+      await db.batch([
+        db.prepare('DELETE FROM season_clubs WHERE season_id=? AND club_id=?').bind(div.season_id,clubId),
+        db.prepare('INSERT OR REPLACE INTO season_clubs(season_id,division_id,club_id,points_adjustment) VALUES(?,?,?,COALESCE((SELECT points_adjustment FROM season_clubs WHERE season_id=? AND club_id=?),0))').bind(div.season_id,divisionId,clubId,div.season_id,clubId)
+      ]);
+    }
+  }
   return json({ok:true,id:clubId,slug,by:admin.username});
 }
 
@@ -841,13 +857,78 @@ async function adminDivisionSave(request,env){
   if(id)await db.prepare('UPDATE divisions SET season_id=?,name=?,level=?,max_clubs=? WHERE id=?').bind(seasonId,name,level,maxClubs,id).run();else await db.prepare('INSERT INTO divisions(season_id,name,level,max_clubs) VALUES(?,?,?,?)').bind(seasonId,name,level,maxClubs).run();return json({ok:true});
 }
 async function adminMatchSave(request,env){
-  const db=requireDb(env);await requireAdminPermission(request,env,'matches');const b=await request.json(),id=asId(b.id),seasonId=asId(b.seasonId),divisionId=asId(b.divisionId),home=asId(b.homeClubId),away=asId(b.awayClubId),matchday=Math.max(1,Math.trunc(Number(b.matchday)||1)),scheduled=cleanText(b.scheduledAt,40);if(!seasonId||!divisionId||!home||!away||home===away||!scheduled)return fail('Matchdaten sind unvollständig.');
-  if(id)await db.prepare(`UPDATE matches SET season_id=?,division_id=?,matchday=?,home_club_id=?,away_club_id=?,scheduled_at=?,updated_at=datetime('now') WHERE id=?`).bind(seasonId,divisionId,matchday,home,away,scheduled,id).run();else await db.prepare(`INSERT INTO matches(season_id,division_id,matchday,home_club_id,away_club_id,scheduled_at) VALUES(?,?,?,?,?,?)`).bind(seasonId,divisionId,matchday,home,away,scheduled).run();return json({ok:true});
+  const db=requireDb(env);await requireAdminPermission(request,env,'matches');
+  const b=await request.json(),id=asId(b.id),seasonId=asId(b.seasonId),divisionId=asId(b.divisionId),home=asId(b.homeClubId),away=asId(b.awayClubId),matchday=Math.max(1,Math.trunc(Number(b.matchday)||1)),scheduled=cleanText(b.scheduledAt,40);
+  if(!seasonId||!divisionId||!home||!away||home===away)return fail('Matchdaten sind unvollständig.');
+  const members=await db.prepare(`SELECT club_id FROM season_clubs WHERE season_id=? AND division_id=? AND club_id IN (?,?)`).bind(seasonId,divisionId,home,away).all();
+  if((members.results||[]).length<2)return fail('Beide Clubs müssen dieser Saison und Liga zugewiesen sein.',409);
+  if(id)await db.prepare(`UPDATE matches SET season_id=?,division_id=?,matchday=?,home_club_id=?,away_club_id=?,scheduled_at=?,updated_at=datetime('now') WHERE id=?`).bind(seasonId,divisionId,matchday,home,away,scheduled||'',id).run();
+  else await db.prepare(`INSERT INTO matches(season_id,division_id,matchday,home_club_id,away_club_id,scheduled_at) VALUES(?,?,?,?,?,?)`).bind(seasonId,divisionId,matchday,home,away,scheduled||'').run();
+  return json({ok:true});
+}
+
+function roundRobinRounds(ids){
+  const arr=[...ids];if(arr.length%2)arr.push(null);const n=arr.length,rounds=[];let cur=[...arr];
+  for(let r=0;r<n-1;r++){
+    const games=[];
+    for(let i=0;i<n/2;i++){
+      let a=cur[i],b=cur[n-1-i];if(a==null||b==null)continue;
+      if((r+i)%2===0)games.push([a,b]);else games.push([b,a]);
+    }
+    rounds.push(games);cur=[cur[0],cur[n-1],...cur.slice(1,n-1)];
+  }
+  return rounds;
+}
+async function adminGenerateMatches(request,env){
+  const db=requireDb(env),admin=await requireAdminPermission(request,env,'matches'),b=await request.json();
+  const seasonId=asId(b.seasonId),divisionId=asId(b.divisionId),mode=String(b.mode||'DOUBLE').toUpperCase(),replace=!!b.replace,target=Math.max(1,Math.min(60,Math.trunc(Number(b.targetMatchesPerTeam)||0)));
+  if(!seasonId||!divisionId)return fail('Saison und Liga sind erforderlich.');
+  const div=await db.prepare('SELECT id,name,season_id FROM divisions WHERE id=? AND season_id=?').bind(divisionId,seasonId).first();if(!div)return fail('Liga gehört nicht zur gewählten Saison.',409);
+  let clubs=await db.prepare('SELECT club_id FROM season_clubs WHERE season_id=? AND division_id=? ORDER BY club_id').bind(seasonId,divisionId).all();
+  if(!(clubs.results||[]).length){clubs=await db.prepare('SELECT id club_id FROM clubs WHERE division_id=? ORDER BY id').bind(divisionId).all();}
+  const ids=(clubs.results||[]).map(x=>Number(x.club_id));if(ids.length<2)return fail('In dieser Liga sind nicht genügend Teams eingetragen.',409);
+  const existing=await db.prepare('SELECT COUNT(*) total,SUM(CASE WHEN status IN (\'CONFIRMED\',\'SUBMITTED\',\'DISPUTED\') THEN 1 ELSE 0 END) locked FROM matches WHERE season_id=? AND division_id=?').bind(seasonId,divisionId).first();
+  if(Number(existing?.total||0)>0&&!replace)return fail(`Für diese Liga existieren bereits ${existing.total} Matches. Aktiviere „Spielplan ersetzen“, wenn du neu generieren willst.`,409);
+  if(replace&&Number(existing?.locked||0)>0)return fail('Der Spielplan kann nicht ersetzt werden, weil bereits Ergebnisse eingereicht oder bestätigt wurden.',409);
+  if(replace)await db.prepare(`DELETE FROM matches WHERE season_id=? AND division_id=? AND status IN ('SCHEDULED','CANCELLED')`).bind(seasonId,divisionId).run();
+  const base=roundRobinRounds(ids),rounds=[];
+  if(mode==='SINGLE'){rounds.push(...base);}
+  else if(mode==='TARGET'){
+    const wanted=Math.max(ids.length-1,target||ids.length-1);let played=0,cycle=0;
+    while(played<wanted){const src=base[cycle%base.length].map(([h,a])=>cycle<base.length?[h,a]:[a,h]);rounds.push(src);played++;cycle++;}
+  }else{rounds.push(...base,...base.map(g=>g.map(([h,a])=>[a,h])));}
+  const batchId=crypto.randomUUID();let created=0,matchday=1;
+  for(const games of rounds){
+    const stmts=[];
+    for(const [home,away] of games){stmts.push(db.prepare(`INSERT INTO matches(season_id,division_id,matchday,home_club_id,away_club_id,scheduled_at,status) VALUES(?,?,?,?,?,'','SCHEDULED')`).bind(seasonId,divisionId,matchday,home,away));}
+    for(let i=0;i<stmts.length;i+=40){const res=await db.batch(stmts.slice(i,i+40));created+=res.length;}
+    matchday++;
+  }
+  // Tag generated matches that do not already have metadata.
+  await db.prepare(`INSERT OR IGNORE INTO match_schedule_meta(match_id,generated_by,generated_at,source) SELECT id,?,datetime('now'),? FROM matches WHERE season_id=? AND division_id=?`).bind(admin.id,`AUTO:${batchId}`,seasonId,divisionId).run();
+  return json({ok:true,clubs:ids.length,matchdays:rounds.length,matches:rounds.reduce((a,x)=>a+x.length,0),mode});
+}
+
+async function adminMatchDetail(request,env){
+  const db=requireDb(env);await requireAdminPermission(request,env,'matches');const u=new URL(request.url),id=asId(u.searchParams.get('id'));if(!id)return fail('Match fehlt.');
+  const match=await db.prepare(`SELECT m.*,h.name home_name,a.name away_name FROM matches m JOIN clubs h ON h.id=m.home_club_id JOIN clubs a ON a.id=m.away_club_id WHERE m.id=?`).bind(id).first();if(!match)return fail('Match nicht gefunden.',404);
+  const roster=async clubId=>(await db.prepare(`SELECT u.id,u.username,p.position,p.avatar_key,cm.shirt_number,ps.goals,ps.assists,ps.saves,ps.clean_sheet,ps.yellow_cards,ps.red_cards,ps.rating,ps.motm,CASE WHEN ps.id IS NULL THEN 0 ELSE 1 END played FROM club_members cm JOIN users u ON u.id=cm.user_id LEFT JOIN profiles p ON p.user_id=u.id LEFT JOIN player_stats ps ON ps.match_id=? AND ps.user_id=u.id WHERE cm.club_id=? AND cm.left_at IS NULL ORDER BY u.username`).bind(id,clubId).all()).results||[];
+  return json({match,homeSquad:await roster(match.home_club_id),awaySquad:await roster(match.away_club_id)});
 }
 async function adminMatchResult(request,env){
   const db=requireDb(env),admin=await requireAdminPermission(request,env,'matches'),b=await request.json(),id=asId(b.matchId),hs=Math.trunc(Number(b.homeScore)),as=Math.trunc(Number(b.awayScore));if(!id||hs<0||as<0||hs>99||as>99)return fail('Ungültiges Ergebnis.');
-  const m=await db.prepare('SELECT * FROM matches WHERE id=?').bind(id).first();if(!m)return fail('Match nicht gefunden.',404);const wasConfirmed=m.status==='CONFIRMED';
-  await db.prepare(`UPDATE matches SET home_score=?,away_score=?,status='CONFIRMED',confirmed_by=?,notes=?,updated_at=datetime('now') WHERE id=?`).bind(hs,as,admin.id,cleanText(b.notes,500),id).run();if(!wasConfirmed)await awardMatchCoins(db,{...m,home_score:hs,away_score:as});return json({ok:true});
+  const m=await db.prepare('SELECT * FROM matches WHERE id=?').bind(id).first();if(!m)return fail('Match nicht gefunden.',404);const wasConfirmed=m.status==='CONFIRMED',stats=Array.isArray(b.stats)?b.stats:[];
+  const motmCount=stats.filter(x=>x&&x.played&&x.motm).length;if(motmCount>1)return fail('Es kann pro Match nur einen Man of the Match geben.',409);
+  const statStmts=[];
+  for(const row of stats){
+    const userId=asId(row.userId),clubId=asId(row.clubId);if(!userId||![Number(m.home_club_id),Number(m.away_club_id)].includes(Number(clubId)))continue;
+    const member=await db.prepare('SELECT 1 FROM club_members WHERE club_id=? AND user_id=? AND left_at IS NULL').bind(clubId,userId).first();if(!member)return fail('Ein ausgewählter Spieler gehört nicht zum Match-Club.',409);
+    if(!row.played){statStmts.push(db.prepare('DELETE FROM player_stats WHERE match_id=? AND user_id=?').bind(id,userId));continue;}
+    statStmts.push(db.prepare(`INSERT INTO player_stats(match_id,user_id,club_id,goals,assists,saves,clean_sheet,yellow_cards,red_cards,rating,motm) VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(match_id,user_id) DO UPDATE SET club_id=excluded.club_id,goals=excluded.goals,assists=excluded.assists,saves=excluded.saves,clean_sheet=excluded.clean_sheet,yellow_cards=excluded.yellow_cards,red_cards=excluded.red_cards,rating=excluded.rating,motm=excluded.motm`).bind(id,userId,clubId,Math.max(0,Math.trunc(Number(row.goals)||0)),Math.max(0,Math.trunc(Number(row.assists)||0)),Math.max(0,Math.trunc(Number(row.saves)||0)),bool01(row.cleanSheet),Math.max(0,Math.min(2,Math.trunc(Number(row.yellowCards)||0))),Math.max(0,Math.min(1,Math.trunc(Number(row.redCards)||0))),Math.max(0,Math.min(10,Number(row.rating)||0)),bool01(row.motm)));
+  }
+  for(let i=0;i<statStmts.length;i+=40)await db.batch(statStmts.slice(i,i+40));
+  await db.prepare(`UPDATE matches SET home_score=?,away_score=?,status='CONFIRMED',confirmed_by=?,notes=?,updated_at=datetime('now') WHERE id=?`).bind(hs,as,admin.id,cleanText(b.notes,500),id).run();
+  if(!wasConfirmed)await awardMatchCoins(db,{...m,home_score:hs,away_score:as});return json({ok:true});
 }
 async function adminNewsSave(request,env){
   const db=requireDb(env),admin=await requireAdminPermission(request,env,'news'),b=await request.json(),id=asId(b.id),title=cleanText(b.title,160),body=cleanText(b.body,20000),status=['DRAFT','PUBLISHED','ARCHIVED'].includes(b.status)?b.status:'DRAFT';if(!title||!body)return fail('Titel und Inhalt sind erforderlich.');const slug=slugify(b.slug||title),excerpt=cleanText(b.excerpt,400),imageKey=cleanText(b.imageKey,250)||null,published=status==='PUBLISHED'?(b.publishedAt||new Date().toISOString()):null;
@@ -863,7 +944,7 @@ async function managerOverview(request,env){
   if(!club)return fail('Du verwaltest aktuell keinen Club.',403);
   const [squad,matches,applications]=await Promise.all([
     db.prepare(`SELECT u.id,u.username,p.position,p.secondary_position,p.overall,p.avatar_key,p.country,cm.role,cm.shirt_number,cm.squad_status FROM club_members cm JOIN users u ON u.id=cm.user_id LEFT JOIN profiles p ON p.user_id=u.id WHERE cm.club_id=? AND cm.left_at IS NULL ORDER BY CASE cm.role WHEN 'MANAGER' THEN 0 WHEN 'CO_MANAGER' THEN 1 WHEN 'CAPTAIN' THEN 2 ELSE 3 END,u.username`).bind(club.id).all(),
-    db.prepare(`SELECT m.*,h.name home_name,a.name away_name FROM matches m JOIN clubs h ON h.id=m.home_club_id JOIN clubs a ON a.id=m.away_club_id WHERE m.home_club_id=? OR m.away_club_id=? ORDER BY m.scheduled_at DESC LIMIT 30`).bind(club.id,club.id).all(),
+    db.prepare(`SELECT m.*,h.name home_name,a.name away_name,mcs.result_submitted_at,mcs.stats_submitted_at FROM matches m JOIN clubs h ON h.id=m.home_club_id JOIN clubs a ON a.id=m.away_club_id LEFT JOIN match_club_submissions mcs ON mcs.match_id=m.id AND mcs.club_id=? WHERE m.home_club_id=? OR m.away_club_id=? ORDER BY CASE WHEN m.scheduled_at='' THEN 0 ELSE 1 END ASC,m.matchday ASC,m.scheduled_at DESC LIMIT 100`).bind(club.id,club.id,club.id).all(),
     db.prepare(`SELECT a.id,a.status,a.message,a.created_at,u.username,p.position,p.overall FROM applications a JOIN users u ON u.id=a.user_id LEFT JOIN profiles p ON p.user_id=u.id WHERE a.club_id=? ORDER BY a.created_at DESC LIMIT 30`).bind(club.id).all()
   ]);
   return json({club,squad:squad.results||[],matches:matches.results||[],applications:applications.results||[]});
@@ -925,12 +1006,59 @@ async function managerApplicationAction(request,env){
   ]);return json({ok:true,status:'ACCEPTED'});
 }
 
+async function managerMatchSchedule(request,env){
+  const db=requireDb(env),u=await requireUser(request,env),b=await request.json(),matchId=asId(b.matchId),scheduled=cleanText(b.scheduledAt,40);if(!matchId||!scheduled)return fail('Datum und Startzeit fehlen.');
+  const m=await db.prepare('SELECT * FROM matches WHERE id=?').bind(matchId).first();if(!m)return fail('Match nicht gefunden.',404);
+  let clubId=null;if(await canClubPermission(db,u,m.home_club_id,'submit_results'))clubId=m.home_club_id;else if(await canClubPermission(db,u,m.away_club_id,'submit_results'))clubId=m.away_club_id;else return fail('Du darfst den Termin dieses Matches nicht setzen.',403);
+  if(['CONFIRMED','CANCELLED'].includes(m.status))return fail('Der Termin eines abgeschlossenen Matches kann nicht mehr geändert werden.',409);
+  await db.batch([
+    db.prepare(`UPDATE matches SET scheduled_at=?,updated_at=datetime('now') WHERE id=?`).bind(scheduled,matchId),
+    db.prepare(`INSERT INTO match_schedule_meta(match_id,scheduled_by,scheduled_updated_at,source) VALUES(?,?,datetime('now'),'VM') ON CONFLICT(match_id) DO UPDATE SET scheduled_by=excluded.scheduled_by,scheduled_updated_at=excluded.scheduled_updated_at`).bind(matchId,u.id)
+  ]);return json({ok:true,clubId,scheduledAt:scheduled});
+}
+async function managerMatchStatsBatch(request,env){
+  const db=requireDb(env),u=await requireUser(request,env),b=await request.json(),matchId=asId(b.matchId),rows=Array.isArray(b.stats)?b.stats:[];if(!matchId)return fail('Match fehlt.');const m=await db.prepare('SELECT * FROM matches WHERE id=?').bind(matchId).first();if(!m)return fail('Match nicht gefunden.',404);
+  let clubId=null;if(await canClubPermission(db,u,m.home_club_id,'manage_stats'))clubId=m.home_club_id;else if(await canClubPermission(db,u,m.away_club_id,'manage_stats'))clubId=m.away_club_id;else return fail('Keine Statistik-Rechte für dieses Match.',403);
+  if(rows.filter(x=>x&&x.played&&x.motm).length>1)return fail('Für deinen Club kann nur ein MOTM markiert werden.',409);
+  const stmts=[];
+  for(const row of rows){const userId=asId(row.userId);if(!userId)continue;const member=await db.prepare('SELECT 1 FROM club_members WHERE club_id=? AND user_id=? AND left_at IS NULL').bind(clubId,userId).first();if(!member)return fail('Ein ausgewählter Spieler gehört nicht zu deinem Club.',409);if(!row.played){stmts.push(db.prepare('DELETE FROM player_stats WHERE match_id=? AND user_id=?').bind(matchId,userId));continue;}stmts.push(db.prepare(`INSERT INTO player_stats(match_id,user_id,club_id,goals,assists,saves,clean_sheet,yellow_cards,red_cards,rating,motm) VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(match_id,user_id) DO UPDATE SET club_id=excluded.club_id,goals=excluded.goals,assists=excluded.assists,saves=excluded.saves,clean_sheet=excluded.clean_sheet,yellow_cards=excluded.yellow_cards,red_cards=excluded.red_cards,rating=excluded.rating,motm=excluded.motm`).bind(matchId,userId,clubId,Math.max(0,Math.trunc(Number(row.goals)||0)),Math.max(0,Math.trunc(Number(row.assists)||0)),Math.max(0,Math.trunc(Number(row.saves)||0)),bool01(row.cleanSheet),Math.max(0,Math.min(2,Math.trunc(Number(row.yellowCards)||0))),Math.max(0,Math.min(1,Math.trunc(Number(row.redCards)||0))),Math.max(0,Math.min(10,Number(row.rating)||0)),bool01(row.motm)));}
+  stmts.push(db.prepare(`INSERT INTO match_club_submissions(match_id,club_id,submitted_by,stats_submitted_at,updated_at) VALUES(?,?,?,datetime('now'),datetime('now')) ON CONFLICT(match_id,club_id) DO UPDATE SET submitted_by=excluded.submitted_by,stats_submitted_at=excluded.stats_submitted_at,updated_at=datetime('now')`).bind(matchId,clubId,u.id));
+  for(let i=0;i<stmts.length;i+=40)await db.batch(stmts.slice(i,i+40));return json({ok:true,clubId});
+}
+
 async function managerMatchStats(request,env){
   const db=requireDb(env),u=await requireUser(request,env),b=await request.json(),matchId=asId(b.matchId),userId=asId(b.userId);if(!matchId||!userId)return fail('Match und Spieler fehlen.');const m=await db.prepare('SELECT * FROM matches WHERE id=?').bind(matchId).first();if(!m)return fail('Match nicht gefunden.',404);
   let clubId=null;if(await canClubPermission(db,u,m.home_club_id,'manage_stats'))clubId=m.home_club_id;else if(await canClubPermission(db,u,m.away_club_id,'manage_stats'))clubId=m.away_club_id;else return fail('Keine Statistik-Rechte für dieses Match.',403);
   const member=await db.prepare('SELECT 1 FROM club_members WHERE club_id=? AND user_id=? AND left_at IS NULL').bind(clubId,userId).first();if(!member)return fail('Spieler gehört nicht zum Club.',409);
   const goals=Math.max(0,Math.min(99,Math.trunc(Number(b.goals)||0))),assists=Math.max(0,Math.min(99,Math.trunc(Number(b.assists)||0))),saves=Math.max(0,Math.min(99,Math.trunc(Number(b.saves)||0))),rating=Math.max(0,Math.min(10,Number(b.rating)||0));
   await db.prepare(`INSERT INTO player_stats(match_id,user_id,club_id,goals,assists,saves,clean_sheet,yellow_cards,red_cards,rating,motm) VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(match_id,user_id) DO UPDATE SET club_id=excluded.club_id,goals=excluded.goals,assists=excluded.assists,saves=excluded.saves,clean_sheet=excluded.clean_sheet,yellow_cards=excluded.yellow_cards,red_cards=excluded.red_cards,rating=excluded.rating,motm=excluded.motm`).bind(matchId,userId,clubId,goals,assists,saves,bool01(b.cleanSheet),Math.max(0,Math.min(2,Math.trunc(Number(b.yellowCards)||0))),Math.max(0,Math.min(1,Math.trunc(Number(b.redCards)||0))),rating,bool01(b.motm)).run();return json({ok:true});
+}
+
+async function giftCoins(request,env){
+  const db=requireDb(env),u=await requireUser(request,env),b=await request.json(),amount=Math.trunc(Number(b.amount)),message=cleanText(b.message,240),source=String(b.source||'PLAYER').toUpperCase(),targetType=String(b.targetType||'PLAYER').toUpperCase();
+  if(!Number.isInteger(amount)||amount<1||amount>10000)return fail('Geschenkbetrag muss zwischen 1 und 10.000 EPL Coins liegen.');
+  if(!['PLAYER','CLUB'].includes(targetType)||!['PLAYER','CLUB'].includes(source))return fail('Ungültiges Geschenkziel.');
+  let senderUserId=null,senderClubId=null,targetUserId=null,targetClubId=null,targetName='';
+  if(source==='PLAYER')senderUserId=u.id;else{
+    senderClubId=asId(b.sourceClubId);if(!senderClubId)return fail('Club fehlt.');if(!(await canClubPermission(db,u,senderClubId,'manage_roster')))return fail('Du darfst nicht über diese Clubkasse verfügen.',403);
+  }
+  if(targetType==='PLAYER'){
+    if(b.targetUserId)targetUserId=asId(b.targetUserId);else{const t=await db.prepare('SELECT id,username FROM users WHERE username=? COLLATE NOCASE').bind(cleanText(b.targetUsername,24)).first();targetUserId=t?.id;targetName=t?.username||'';}
+    if(!targetUserId)return fail('Empfänger nicht gefunden.',404);if(senderUserId&&Number(senderUserId)===Number(targetUserId))return fail('Du kannst dir nicht selbst Coins schenken.',409);
+    if(!targetName){const t=await db.prepare('SELECT username FROM users WHERE id=?').bind(targetUserId).first();targetName=t?.username||'Spieler';}
+  }else{
+    if(b.targetClubId)targetClubId=asId(b.targetClubId);else{const c=await db.prepare('SELECT id,name FROM clubs WHERE slug=?').bind(cleanText(b.targetSlug,80)).first();targetClubId=c?.id;targetName=c?.name||'';}
+    if(!targetClubId)return fail('Club nicht gefunden.',404);if(senderClubId&&Number(senderClubId)===Number(targetClubId))return fail('Der Club kann nicht an sich selbst schenken.',409);
+    if(!targetName){const c=await db.prepare('SELECT name FROM clubs WHERE id=?').bind(targetClubId).first();targetName=c?.name||'Club';}
+  }
+  if(senderUserId){await db.prepare('INSERT OR IGNORE INTO coin_wallets(user_id,balance) VALUES(?,0)').bind(senderUserId).run();const w=await db.prepare('SELECT balance FROM coin_wallets WHERE user_id=?').bind(senderUserId).first();if(Number(w?.balance||0)<amount)return fail('Nicht genügend EPL Coins.',409);}
+  else{await db.prepare('INSERT OR IGNORE INTO club_coin_wallets(club_id,balance) VALUES(?,0)').bind(senderClubId).run();const w=await db.prepare('SELECT balance FROM club_coin_wallets WHERE club_id=?').bind(senderClubId).first();if(Number(w?.balance||0)<amount)return fail('Nicht genügend Coins in der Clubkasse.',409);}
+  const stmts=[];
+  if(senderUserId)stmts.push(db.prepare(`UPDATE coin_wallets SET balance=balance-?,lifetime_spent=lifetime_spent+?,updated_at=datetime('now') WHERE user_id=?`).bind(amount,amount,senderUserId));else stmts.push(db.prepare(`UPDATE club_coin_wallets SET balance=balance-?,lifetime_spent=lifetime_spent+?,updated_at=datetime('now') WHERE club_id=?`).bind(amount,amount,senderClubId));
+  if(targetUserId){stmts.push(db.prepare(`INSERT INTO coin_wallets(user_id,balance,lifetime_earned,lifetime_spent,updated_at) VALUES(?,?,?,0,datetime('now')) ON CONFLICT(user_id) DO UPDATE SET balance=balance+excluded.balance,lifetime_earned=lifetime_earned+excluded.lifetime_earned,updated_at=datetime('now')`).bind(targetUserId,amount,amount));}
+  else{stmts.push(db.prepare(`INSERT INTO club_coin_wallets(club_id,balance,lifetime_earned,lifetime_spent,updated_at) VALUES(?,?,?,0,datetime('now')) ON CONFLICT(club_id) DO UPDATE SET balance=balance+excluded.balance,lifetime_earned=lifetime_earned+excluded.lifetime_earned,updated_at=datetime('now')`).bind(targetClubId,amount,amount));}
+  stmts.push(db.prepare(`INSERT INTO coin_gifts(sender_user_id,sender_club_id,recipient_user_id,recipient_club_id,amount,message) VALUES(?,?,?,?,?,?)`).bind(senderUserId,senderClubId,targetUserId,targetClubId,amount,message));
+  await db.batch(stmts);return json({ok:true,amount,targetName});
 }
 
 async function awardMatchCoins(db,m){
@@ -1021,14 +1149,41 @@ async function getClub(slug,request,env){
   ]);
   return json({club:c,squad:squad.results||[],posts:posts.results||[],recentMatches:recentMatches.results||[],upcomingMatches:upcomingMatches.results||[],transfers:transfers.results||[],achievements:achievements.results||[],topPlayers:topPlayers.results||[]});
 }
-async function getStandings(env){const db=requireDb(env);const r=await db.prepare(`WITH stats AS (SELECT sc.club_id,COUNT(m.id) played,SUM(CASE WHEN (m.home_club_id=sc.club_id AND m.home_score>m.away_score) OR (m.away_club_id=sc.club_id AND m.away_score>m.home_score) THEN 1 ELSE 0 END) wins,SUM(CASE WHEN m.home_score=m.away_score THEN 1 ELSE 0 END) draws,SUM(CASE WHEN (m.home_club_id=sc.club_id AND m.home_score<m.away_score) OR (m.away_club_id=sc.club_id AND m.away_score<m.home_score) THEN 1 ELSE 0 END) losses,SUM(CASE WHEN m.home_club_id=sc.club_id THEN m.home_score ELSE m.away_score END) gf,SUM(CASE WHEN m.home_club_id=sc.club_id THEN m.away_score ELSE m.home_score END) ga FROM season_clubs sc LEFT JOIN matches m ON m.season_id=sc.season_id AND (m.home_club_id=sc.club_id OR m.away_club_id=sc.club_id) AND m.status='CONFIRMED' WHERE sc.season_id=1 GROUP BY sc.club_id) SELECT c.id,c.name,c.slug,COALESCE(s.played,0) played,COALESCE(s.wins,0) wins,COALESCE(s.draws,0) draws,COALESCE(s.losses,0) losses,COALESCE(s.gf,0) gf,COALESCE(s.ga,0) ga,(COALESCE(s.wins,0)*3+COALESCE(s.draws,0)) points FROM clubs c JOIN season_clubs sc ON sc.club_id=c.id AND sc.season_id=1 LEFT JOIN stats s ON s.club_id=c.id ORDER BY points DESC,(gf-ga) DESC,gf DESC`).all();return json({standings:r.results})}
-async function getFixtures(env){const db=requireDb(env);const r=await db.prepare(`SELECT m.*,h.name home_name,h.slug home_slug,a.name away_name,a.slug away_slug,d.name division_name FROM matches m JOIN clubs h ON h.id=m.home_club_id JOIN clubs a ON a.id=m.away_club_id JOIN divisions d ON d.id=m.division_id ORDER BY scheduled_at ASC LIMIT 50`).all();return json({fixtures:r.results})}
+async function getStandings(request,env){
+  const db=requireDb(env),url=new URL(request.url),requestedSeason=asId(url.searchParams.get('seasonId')),requestedDivision=asId(url.searchParams.get('divisionId'));
+  const season=requestedSeason?await db.prepare('SELECT * FROM seasons WHERE id=?').bind(requestedSeason).first():await db.prepare(`SELECT * FROM seasons ORDER BY CASE status WHEN 'ACTIVE' THEN 0 WHEN 'REGISTRATION' THEN 1 WHEN 'DRAFT' THEN 2 ELSE 3 END,id DESC LIMIT 1`).first();
+  if(!season)return json({season:null,divisions:[],standings:[]});
+  const divisions=(await db.prepare('SELECT id,name,level,max_clubs FROM divisions WHERE season_id=? ORDER BY level,id').bind(season.id).all()).results||[];
+  const sql=`WITH memberships AS (
+      SELECT season_id,division_id,club_id,points_adjustment FROM season_clubs WHERE season_id=?
+      UNION
+      SELECT d.season_id,d.id,c.id,0 FROM clubs c JOIN divisions d ON d.id=c.division_id WHERE d.season_id=? AND NOT EXISTS(SELECT 1 FROM season_clubs sc WHERE sc.season_id=d.season_id AND sc.club_id=c.id)
+    ), stats AS (
+      SELECT mem.club_id,mem.division_id,
+      COUNT(m.id) played,
+      SUM(CASE WHEN (m.home_club_id=mem.club_id AND m.home_score>m.away_score) OR (m.away_club_id=mem.club_id AND m.away_score>m.home_score) THEN 1 ELSE 0 END) wins,
+      SUM(CASE WHEN m.id IS NOT NULL AND m.home_score=m.away_score THEN 1 ELSE 0 END) draws,
+      SUM(CASE WHEN (m.home_club_id=mem.club_id AND m.home_score<m.away_score) OR (m.away_club_id=mem.club_id AND m.away_score<m.home_score) THEN 1 ELSE 0 END) losses,
+      SUM(CASE WHEN m.home_club_id=mem.club_id THEN m.home_score WHEN m.away_club_id=mem.club_id THEN m.away_score ELSE 0 END) gf,
+      SUM(CASE WHEN m.home_club_id=mem.club_id THEN m.away_score WHEN m.away_club_id=mem.club_id THEN m.home_score ELSE 0 END) ga
+      FROM memberships mem LEFT JOIN matches m ON m.season_id=? AND m.division_id=mem.division_id AND (m.home_club_id=mem.club_id OR m.away_club_id=mem.club_id) AND m.status='CONFIRMED'
+      GROUP BY mem.club_id,mem.division_id
+    )
+    SELECT c.id,c.name,c.slug,c.logo_key,mem.division_id,d.name division_name,d.level division_level,
+      COALESCE(st.played,0) played,COALESCE(st.wins,0) wins,COALESCE(st.draws,0) draws,COALESCE(st.losses,0) losses,COALESCE(st.gf,0) gf,COALESCE(st.ga,0) ga,
+      (COALESCE(st.wins,0)*3+COALESCE(st.draws,0)+COALESCE(mem.points_adjustment,0)) points
+    FROM memberships mem JOIN clubs c ON c.id=mem.club_id JOIN divisions d ON d.id=mem.division_id LEFT JOIN stats st ON st.club_id=mem.club_id AND st.division_id=mem.division_id
+    WHERE (? IS NULL OR mem.division_id=?) ORDER BY d.level,points DESC,(gf-ga) DESC,gf DESC,c.name`;
+  const r=await db.prepare(sql).bind(season.id,season.id,season.id,requestedDivision,requestedDivision).all();
+  return json({season:{id:season.id,name:season.name,status:season.status},divisions,standings:r.results||[]});
+}
+async function getFixtures(env){const db=requireDb(env);const r=await db.prepare(`SELECT m.*,h.name home_name,h.slug home_slug,a.name away_name,a.slug away_slug,d.name division_name FROM matches m JOIN clubs h ON h.id=m.home_club_id JOIN clubs a ON a.id=m.away_club_id JOIN divisions d ON d.id=m.division_id ORDER BY CASE WHEN scheduled_at='' THEN 1 ELSE 0 END,scheduled_at ASC,matchday ASC LIMIT 100`).all();return json({fixtures:r.results})}
 
 async function listPlayers(env){
   const db=requireDb(env);
   const r=await db.prepare(`SELECT u.username,lower(u.username) slug,p.position,p.secondary_position,p.country,p.avatar_key,p.overall,
     CASE WHEN p.last_seen_at>=datetime('now','-2 minutes') THEN 1 ELSE 0 END is_online,p.equipped_avatar_frame_id,p.equipped_name_effect_id,
-    COALESCE(c.name,'Free Agent') club,
+    c.id club_id,COALESCE(c.name,'Free Agent') club,c.division_id,d.name division_name,d.level division_level,
     COALESCE((SELECT COUNT(*) FROM player_stats ps WHERE ps.user_id=u.id),0) matches,
     COALESCE((SELECT SUM(ps.goals) FROM player_stats ps WHERE ps.user_id=u.id),0) goals,
     COALESCE((SELECT SUM(ps.assists) FROM player_stats ps WHERE ps.user_id=u.id),0) assists,
@@ -1036,7 +1191,7 @@ async function listPlayers(env){
     COALESCE((SELECT SUM(ps.clean_sheet) FROM player_stats ps WHERE ps.user_id=u.id),0) clean_sheets,
     COALESCE(ROUND((SELECT AVG(ps.rating) FROM player_stats ps WHERE ps.user_id=u.id),2),COALESCE(p.overall,0)) rating
     FROM users u LEFT JOIN profiles p ON p.user_id=u.id LEFT JOIN profile_onboarding po ON po.user_id=u.id
-    LEFT JOIN club_members cm ON cm.user_id=u.id AND cm.left_at IS NULL LEFT JOIN clubs c ON c.id=cm.club_id
+    LEFT JOIN club_members cm ON cm.user_id=u.id AND cm.left_at IS NULL LEFT JOIN clubs c ON c.id=cm.club_id LEFT JOIN divisions d ON d.id=c.division_id
     WHERE u.status='ACTIVE' AND COALESCE(po.completed,CASE WHEN length(trim(COALESCE(p.ea_id,'')))>0 AND length(trim(COALESCE(p.position,'')))>0 THEN 1 ELSE 0 END)=1
     ORDER BY CASE WHEN p.position='TW' THEN COALESCE((SELECT SUM(ps.saves) FROM player_stats ps WHERE ps.user_id=u.id),0) ELSE COALESCE((SELECT SUM(ps.goals) FROM player_stats ps WHERE ps.user_id=u.id),0) END DESC,u.created_at DESC`).all();
   return json({players:r.results});
@@ -1061,7 +1216,7 @@ async function getBootstrap(env){
   const [news,fixtures,players,clubs,transfers,standings]=await Promise.all([
     db.prepare(`SELECT id,slug,title,excerpt,image_key,published_at FROM news WHERE status='PUBLISHED' ORDER BY COALESCE(published_at,created_at) DESC LIMIT 3`).all(),
     db.prepare(`SELECT m.id,m.scheduled_at,m.status,h.name home_name,h.slug home_slug,a.name away_name,a.slug away_slug,d.name division_name FROM matches m JOIN clubs h ON h.id=m.home_club_id JOIN clubs a ON a.id=m.away_club_id JOIN divisions d ON d.id=m.division_id ORDER BY scheduled_at ASC LIMIT 6`).all(),
-    db.prepare(`SELECT u.username,lower(u.username) slug,p.position,p.country,p.avatar_key,p.equipped_avatar_frame_id,p.equipped_name_effect_id,CASE WHEN p.last_seen_at>=datetime('now','-2 minutes') THEN 1 ELSE 0 END is_online,COALESCE(c.name,'Free Agent') club,COALESCE((SELECT SUM(ps.goals) FROM player_stats ps WHERE ps.user_id=u.id),0) goals,COALESCE((SELECT SUM(ps.assists) FROM player_stats ps WHERE ps.user_id=u.id),0) assists,COALESCE((SELECT COUNT(*) FROM player_stats ps WHERE ps.user_id=u.id),0) matches,COALESCE(ROUND((SELECT AVG(ps.rating) FROM player_stats ps WHERE ps.user_id=u.id),2),COALESCE(p.overall,0)) rating FROM users u LEFT JOIN profiles p ON p.user_id=u.id LEFT JOIN profile_onboarding po ON po.user_id=u.id LEFT JOIN club_members cm ON cm.user_id=u.id AND cm.left_at IS NULL LEFT JOIN clubs c ON c.id=cm.club_id WHERE u.status='ACTIVE' AND COALESCE(po.completed,CASE WHEN length(trim(COALESCE(p.ea_id,'')))>0 AND length(trim(COALESCE(p.position,'')))>0 THEN 1 ELSE 0 END)=1 ORDER BY goals DESC,matches DESC LIMIT 6`).all(),
+    db.prepare(`SELECT u.username,lower(u.username) slug,p.position,p.country,p.avatar_key,p.equipped_avatar_frame_id,p.equipped_name_effect_id,CASE WHEN p.last_seen_at>=datetime('now','-2 minutes') THEN 1 ELSE 0 END is_online,c.id club_id,COALESCE(c.name,'Free Agent') club,c.division_id,d.name division_name,d.level division_level,COALESCE((SELECT SUM(ps.goals) FROM player_stats ps WHERE ps.user_id=u.id),0) goals,COALESCE((SELECT SUM(ps.assists) FROM player_stats ps WHERE ps.user_id=u.id),0) assists,COALESCE((SELECT COUNT(*) FROM player_stats ps WHERE ps.user_id=u.id),0) matches,COALESCE(ROUND((SELECT AVG(ps.rating) FROM player_stats ps WHERE ps.user_id=u.id),2),COALESCE(p.overall,0)) rating FROM users u LEFT JOIN profiles p ON p.user_id=u.id LEFT JOIN profile_onboarding po ON po.user_id=u.id LEFT JOIN club_members cm ON cm.user_id=u.id AND cm.left_at IS NULL LEFT JOIN clubs c ON c.id=cm.club_id LEFT JOIN divisions d ON d.id=c.division_id WHERE u.status='ACTIVE' AND COALESCE(po.completed,CASE WHEN length(trim(COALESCE(p.ea_id,'')))>0 AND length(trim(COALESCE(p.position,'')))>0 THEN 1 ELSE 0 END)=1 ORDER BY goals DESC,matches DESC LIMIT 6`).all(),
     db.prepare(`SELECT c.name,c.slug,c.logo_key,c.reputation,c.followers_count,COALESCE(d.name,'Ohne Division') division,u.username manager FROM clubs c LEFT JOIN divisions d ON d.id=c.division_id LEFT JOIN users u ON u.id=c.manager_user_id ORDER BY c.created_at DESC LIMIT 8`).all(),
     db.prepare(`SELECT t.id,t.type,t.occurred_at AS created_at,u.username player,p.position,p.overall rating,fc.name from_club,tc.name to_club FROM transfers t LEFT JOIN users u ON u.id=t.user_id LEFT JOIN profiles p ON p.user_id=t.user_id LEFT JOIN clubs fc ON fc.id=t.from_club_id LEFT JOIN clubs tc ON tc.id=t.to_club_id ORDER BY t.occurred_at DESC LIMIT 6`).all(),
     db.prepare(`WITH stats AS (SELECT sc.club_id,COUNT(m.id) played,SUM(CASE WHEN (m.home_club_id=sc.club_id AND m.home_score>m.away_score) OR (m.away_club_id=sc.club_id AND m.away_score>m.home_score) THEN 1 ELSE 0 END) wins,SUM(CASE WHEN m.home_score=m.away_score THEN 1 ELSE 0 END) draws,SUM(CASE WHEN (m.home_club_id=sc.club_id AND m.home_score<m.away_score) OR (m.away_club_id=sc.club_id AND m.away_score<m.home_score) THEN 1 ELSE 0 END) losses,SUM(CASE WHEN m.home_club_id=sc.club_id THEN m.home_score ELSE m.away_score END) gf,SUM(CASE WHEN m.home_club_id=sc.club_id THEN m.away_score ELSE m.home_score END) ga FROM season_clubs sc LEFT JOIN matches m ON m.season_id=sc.season_id AND (m.home_club_id=sc.club_id OR m.away_club_id=sc.club_id) AND m.status='CONFIRMED' WHERE sc.season_id=1 GROUP BY sc.club_id) SELECT c.id,c.name,c.slug,COALESCE(s.played,0) played,COALESCE(s.wins,0) wins,COALESCE(s.draws,0) draws,COALESCE(s.losses,0) losses,COALESCE(s.gf,0) gf,COALESCE(s.ga,0) ga,(COALESCE(s.wins,0)*3+COALESCE(s.draws,0)) points FROM clubs c JOIN season_clubs sc ON sc.club_id=c.id AND sc.season_id=1 LEFT JOIN stats s ON s.club_id=c.id ORDER BY points DESC,(gf-ga) DESC,gf DESC LIMIT 6`).all()
