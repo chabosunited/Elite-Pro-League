@@ -175,11 +175,37 @@ async function stripeWebhook(request,env){
 async function verifyStripe(payload,header,secret){const parts=Object.fromEntries(header.split(',').map(x=>x.split('=')));const t=parts.t,v1=parts.v1;if(!t||!v1)return false;if(Math.abs(Date.now()/1000-Number(t))>300)return false;const key=await crypto.subtle.importKey('raw',enc.encode(secret),{name:'HMAC',hash:'SHA-256'},false,['sign']);const sig=await crypto.subtle.sign('HMAC',key,enc.encode(`${t}.${payload}`));const hex=[...new Uint8Array(sig)].map(b=>b.toString(16).padStart(2,'0')).join('');if(hex.length!==v1.length)return false;let d=0;for(let i=0;i<hex.length;i++)d|=hex.charCodeAt(i)^v1.charCodeAt(i);return d===0}
 
 async function uploadMedia(request,env){
-  const u=await requireUser(request,env);if(!env.MEDIA)return fail('R2 binding MEDIA fehlt.',503);const form=await request.formData(),file=form.get('file'),kind=String(form.get('kind')||'avatar');if(!(file instanceof File))return fail('Keine Datei übermittelt.');if(file.size>6*1024*1024)return fail('Datei darf maximal 6 MB groß sein.');if(!['image/jpeg','image/png','image/webp'].includes(file.type))return fail('Nur JPG, PNG oder WebP erlaubt.');
-  const ext=file.type==='image/png'?'png':file.type==='image/webp'?'webp':'jpg';const db=requireDb(env);let key;
-  if(kind==='club-logo'||kind==='club-cover'){const clubSlug=cleanText(form.get('clubSlug'),60);const club=await db.prepare('SELECT id,manager_user_id FROM clubs WHERE slug=?').bind(clubSlug).first();if(!club)return fail('Club nicht gefunden.',404);if(!['LEAGUE_ADMIN','SUPER_ADMIN'].includes(u.role)&&club.manager_user_id!==u.id)return fail('Du verwaltest diesen Club nicht.',403);key=`clubs/${club.id}/${kind}-${crypto.randomUUID()}.${ext}`;await env.MEDIA.put(key,file.stream(),{httpMetadata:{contentType:file.type,cacheControl:'public, max-age=31536000, immutable'}});const col=kind==='club-logo'?'logo_key':'cover_key';await db.prepare(`UPDATE clubs SET ${col}=?,updated_at=datetime('now') WHERE id=?`).bind(key,club.id).run();}
-  else {key=`profiles/${u.id}/${kind}-${crypto.randomUUID()}.${ext}`;await env.MEDIA.put(key,file.stream(),{httpMetadata:{contentType:file.type,cacheControl:'public, max-age=31536000, immutable'}});if(kind==='avatar')await db.prepare('UPDATE profiles SET avatar_key=?,updated_at=datetime(\'now\') WHERE user_id=?').bind(key,u.id).run();if(kind==='cover')await db.prepare('UPDATE profiles SET cover_key=?,updated_at=datetime(\'now\') WHERE user_id=?').bind(key,u.id).run();}
-  return json({key,url:`/api/media/${encodeURIComponent(key)}`});
+  const u=await requireUser(request,env);
+  if(!env.MEDIA)return fail('R2 binding MEDIA fehlt.',503);
+  const form=await request.formData(),file=form.get('file'),kind=String(form.get('kind')||'avatar');
+  const allowedKinds=['avatar','cover','club-logo','club-cover'];
+  if(!allowedKinds.includes(kind))return fail('Ungültiger Bildtyp.');
+  if(!(file instanceof File))return fail('Keine Datei übermittelt.');
+  if(file.type!=='image/webp')return fail('Bilder müssen vor dem Upload als WebP optimiert werden.');
+  const maxBytes=(kind==='avatar'||kind==='club-logo')?600*1024:1200*1024;
+  if(file.size>maxBytes)return fail(`Optimiertes Bild ist zu groß. Maximal ${Math.round(maxBytes/1024)} KB erlaubt.`);
+  const db=requireDb(env);let key,oldKey=null;
+  if(kind==='club-logo'||kind==='club-cover'){
+    const clubSlug=cleanText(form.get('clubSlug'),60);
+    const club=await db.prepare('SELECT id,manager_user_id,logo_key,cover_key FROM clubs WHERE slug=?').bind(clubSlug).first();
+    if(!club)return fail('Club nicht gefunden.',404);
+    if(!['LEAGUE_ADMIN','SUPER_ADMIN'].includes(u.role)&&club.manager_user_id!==u.id)return fail('Du verwaltest diesen Club nicht.',403);
+    key=`clubs/${club.id}/${kind}-${crypto.randomUUID()}.webp`;
+    oldKey=kind==='club-logo'?club.logo_key:club.cover_key;
+    await env.MEDIA.put(key,file.stream(),{httpMetadata:{contentType:'image/webp',cacheControl:'public, max-age=31536000, immutable'},customMetadata:{kind,optimized:'client-webp'}});
+    const col=kind==='club-logo'?'logo_key':'cover_key';
+    await db.prepare(`UPDATE clubs SET ${col}=?,updated_at=datetime('now') WHERE id=?`).bind(key,club.id).run();
+  } else {
+    const profile=await db.prepare('SELECT avatar_key,cover_key FROM profiles WHERE user_id=?').bind(u.id).first();
+    if(!profile)return fail('Profil nicht gefunden.',404);
+    key=`profiles/${u.id}/${kind}-${crypto.randomUUID()}.webp`;
+    oldKey=kind==='avatar'?profile.avatar_key:profile.cover_key;
+    await env.MEDIA.put(key,file.stream(),{httpMetadata:{contentType:'image/webp',cacheControl:'public, max-age=31536000, immutable'},customMetadata:{kind,optimized:'client-webp'}});
+    const col=kind==='avatar'?'avatar_key':'cover_key';
+    await db.prepare(`UPDATE profiles SET ${col}=?,updated_at=datetime('now') WHERE user_id=?`).bind(key,u.id).run();
+  }
+  if(oldKey&&oldKey!==key){try{await env.MEDIA.delete(oldKey)}catch(err){console.warn('Altes R2 Bild konnte nicht gelöscht werden',oldKey,err)}}
+  return json({key,url:`/api/media/${encodeURIComponent(key)}`,contentType:'image/webp',bytes:file.size});
 }
 async function getMedia(key,env){if(!env.MEDIA)return new Response('Not found',{status:404});key=decodeURIComponent(key);const obj=await env.MEDIA.get(key);if(!obj)return new Response('Not found',{status:404});const h=new Headers();obj.writeHttpMetadata(h);h.set('etag',obj.httpEtag);h.set('cache-control',h.get('cache-control')||'public, max-age=3600');return new Response(obj.body,{headers:h})}
 

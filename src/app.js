@@ -132,8 +132,8 @@ function renderPlayerProfile(data, slug){
 
 function renderClubProfile(data, slug){
   if(!data?.club) return `<div class="panel data-panel">${emptyCard('Club nicht gefunden.','Dieser Club existiert noch nicht oder wurde noch nicht angelegt.')}<div style="text-align:center;margin-top:16px"><a class="btn btn-primary" data-link href="/teams">ZU DEN TEAMS</a></div></div>`;
-  const c=data.club, squad=data.squad||[]; const followKey=`club:${slug}`; const following=state.following.has(followKey);
-  return `<section class="club-hero"><img class="club-cover" src="${coverFor(c)}" alt="Titelbild"><div class="container club-info"><div class="club-logo-card"><img src="${clubLogoFor(c)}" alt="${esc(c.name)}"></div><div class="club-title"><h1>${esc(c.name)} ${c.verified?'<span class="verified">✓</span>':''}</h1><span class="badge">${esc(c.division_name||'Noch ohne Division')}</span><p>Manager: ${esc(c.manager_username||'Noch keiner zugewiesen')}</p><p>EA Club ID: ${esc(c.ea_club_id || 'Noch nicht hinterlegt')}</p><div class="club-actions"><button class="btn btn-primary" data-follow="${followKey}">${following?'✓ FOLGE ICH':'+ FOLGEN'}</button><button class="btn btn-ghost" data-apply>◉ BEWERBEN</button><button class="btn btn-ghost" data-message>✉ KONTAKT</button></div></div><section class="panel club-summary"><div class="summary-item">♧<strong style="display:block;font-family:Rajdhani;font-size:22px">${fmt(c.followers_count||0)}</strong><span class="tiny muted">Follower</span></div><div class="rep"><div style="display:flex;align-items:center;gap:10px"><span style="font-size:28px;color:#168fff">▥</span><div><span class="tiny">Club Reputation</span><strong style="display:block">${fmt(c.reputation||0)}</strong></div></div><div class="rep-bar"><span style="width:${Math.min(100,Math.max(6,Math.round((Number(c.reputation||0)/5000)*100)))}%"></span></div></div></section></div></section>
+  const c=data.club, squad=data.squad||[]; const followKey=`club:${slug}`; const following=state.following.has(followKey); const canEditClub=!!state.me && (['LEAGUE_ADMIN','SUPER_ADMIN'].includes(state.me.role) || state.me.username?.toLowerCase()===String(c.manager_username||'').toLowerCase());
+  return `<section class="club-hero"><img class="club-cover" src="${coverFor(c)}" alt="Titelbild"><div class="container club-info"><div class="club-logo-card"><img src="${clubLogoFor(c)}" alt="${esc(c.name)}"></div><div class="club-title"><h1>${esc(c.name)} ${c.verified?'<span class="verified">✓</span>':''}</h1><span class="badge">${esc(c.division_name||'Noch ohne Division')}</span><p>Manager: ${esc(c.manager_username||'Noch keiner zugewiesen')}</p><p>EA Club ID: ${esc(c.ea_club_id || 'Noch nicht hinterlegt')}</p><div class="club-actions"><button class="btn btn-primary" data-follow="${followKey}">${following?'✓ FOLGE ICH':'+ FOLGEN'}</button><button class="btn btn-ghost" data-apply>◉ BEWERBEN</button><button class="btn btn-ghost" data-message>✉ KONTAKT</button>${canEditClub?'<button class="btn btn-ghost" data-club-media>✎ CLUB MEDIEN</button>':''}</div></div><section class="panel club-summary"><div class="summary-item">♧<strong style="display:block;font-family:Rajdhani;font-size:22px">${fmt(c.followers_count||0)}</strong><span class="tiny muted">Follower</span></div><div class="rep"><div style="display:flex;align-items:center;gap:10px"><span style="font-size:28px;color:#168fff">▥</span><div><span class="tiny">Club Reputation</span><strong style="display:block">${fmt(c.reputation||0)}</strong></div></div><div class="rep-bar"><span style="width:${Math.min(100,Math.max(6,Math.round((Number(c.reputation||0)/5000)*100)))}%"></span></div></div></section></div></section>
   <div class="container"><div class="club-tabs">${['Feed','Kader','Statistiken','Spiele','Transfers','Galerie'].map((x,i)=>`<button class="tab-btn ${i===0?'active':''}">${x}</button>`).join('')}</div><div class="club-layout"><section class="panel"><div class="panel-title" style="padding:10px 12px 2px">Club Feed</div><div class="empty">Sobald der Club Beiträge, News oder Galeriebilder veröffentlicht, erscheinen sie hier automatisch.</div></section><div><section class="panel data-panel"><div class="section-head"><span class="panel-title">Kader</span><span class="section-link">GESAMTEN KADER ANZEIGEN ›</span></div>${squad.length?`<div class="squad-grid">${squad.map(m=>`<div class="player-card"><span class="rating">${fmt(m.overall||0)}</span><span class="pos">${esc(m.position||'--')}</span><div class="player-face"><img src="${avatarFor(m)}"></div><div class="pname">${esc(m.username)}</div><div class="pcountry">${esc(m.role||'PLAYER')}</div></div>`).join('')}</div>`:emptyCard('Noch kein Kader vorhanden.','Sobald Spieler dem Club beitreten, erscheint hier automatisch die Startelf und der komplette Kader.')}</section></div><aside><section class="panel right-list"><div class="panel-title">Club Erfolge</div><div class="empty">Erfolge und Trophäen erscheinen, sobald sie in der Datenbank hinterlegt werden.</div></section><section class="panel right-list" style="margin-top:8px"><div class="panel-title">Transfermarkt</div><div class="empty">Transferaktivitäten werden hier nach Vertragsbewegungen automatisch angezeigt.</div></section></aside></div></div>`;
 }
 
@@ -189,6 +189,89 @@ function renderAdmin(){return dashboardShell('Admin Panel',['Dashboard','Benutze
 
 function modal(title, body){const wrap=document.createElement('div');wrap.className='modal-backdrop';wrap.innerHTML=`<section class="panel modal"><button class="modal-close">×</button><h2>${title}</h2>${body}</section>`;document.body.append(wrap);wrap.querySelector('.modal-close').onclick=()=>wrap.remove();wrap.onclick=e=>{if(e.target===wrap)wrap.remove()};return wrap}
 
+const IMAGE_RULES = {
+  avatar: { label:'Profilbild', width:512, height:512, previewWidth:460, previewHeight:460, maxBytes:600*1024, quality:.84 },
+  cover: { label:'Titelbild', width:1600, height:500, previewWidth:720, previewHeight:225, maxBytes:1200*1024, quality:.84 },
+  'club-logo': { label:'Clublogo', width:512, height:512, previewWidth:460, previewHeight:460, maxBytes:600*1024, quality:.84 },
+  'club-cover': { label:'Club-Titelbild', width:1600, height:500, previewWidth:720, previewHeight:225, maxBytes:1200*1024, quality:.84 },
+};
+
+function imageRule(kind){return IMAGE_RULES[kind] || IMAGE_RULES.avatar}
+function humanBytes(bytes){if(bytes<1024)return `${bytes} B`;if(bytes<1024*1024)return `${Math.round(bytes/1024)} KB`;return `${(bytes/1024/1024).toFixed(1)} MB`}
+
+async function decodeImage(file){
+  if(!file || !file.type?.startsWith('image/')) throw new Error('Bitte eine Bilddatei auswählen.');
+  if(file.size>10*1024*1024) throw new Error('Das Originalbild darf maximal 10 MB groß sein.');
+  if(!['image/jpeg','image/png','image/webp'].includes(file.type)) throw new Error('Nur JPG, PNG oder WebP sind erlaubt.');
+  const url=URL.createObjectURL(file);
+  try{
+    const img=new Image(); img.decoding='async'; img.src=url; await img.decode();
+    return {img,url};
+  }catch(err){URL.revokeObjectURL(url);throw new Error('Das Bild konnte nicht gelesen werden.');}
+}
+
+function canvasBlob(canvas, quality){return new Promise((resolve,reject)=>canvas.toBlob(b=>b?resolve(b):reject(new Error('Bild konnte nicht verarbeitet werden.')),'image/webp',quality))}
+async function compressCanvas(canvas,maxBytes,startQuality=.84){
+  let quality=startQuality, blob=await canvasBlob(canvas,quality);
+  while(blob.size>maxBytes && quality>.56){quality-=.07;blob=await canvasBlob(canvas,quality)}
+  if(blob.size>maxBytes) throw new Error(`Das optimierte Bild ist noch zu groß (${humanBytes(blob.size)}). Bitte ein anderes Bild wählen.`);
+  return blob;
+}
+
+async function openImageEditor(file,kind){
+  const rule=imageRule(kind), decoded=await decodeImage(file), img=decoded.img;
+  return new Promise(resolve=>{
+    const wrap=document.createElement('div');wrap.className='modal-backdrop crop-backdrop';
+    wrap.innerHTML=`<section class="panel modal crop-modal"><button class="modal-close" type="button">×</button><h2>${rule.label} zuschneiden</h2><p class="crop-help">Bild mit Maus/Finger verschieben und über den Regler zoomen. Gespeichert wird automatisch als WebP in ${rule.width}×${rule.height}px.</p><div class="crop-stage"><canvas class="crop-canvas" width="${rule.previewWidth}" height="${rule.previewHeight}"></canvas><div class="crop-guide"></div></div><div class="crop-controls"><label>Zoom <input class="crop-zoom" type="range" min="1" max="3" value="1" step="0.01"></label><span class="crop-output">${rule.width} × ${rule.height} WebP</span></div><div class="form-actions"><button class="btn btn-ghost crop-cancel" type="button">ABBRECHEN</button><button class="btn btn-primary crop-save" type="button">SPEICHERN</button></div></section>`;
+    document.body.append(wrap);
+    const canvas=wrap.querySelector('.crop-canvas'),ctx=canvas.getContext('2d',{alpha:false}),zoomInput=wrap.querySelector('.crop-zoom');
+    const state={zoom:1,offsetX:0,offsetY:0,drag:false,startX:0,startY:0,startOffsetX:0,startOffsetY:0};
+    const baseScale=Math.max(canvas.width/img.naturalWidth,canvas.height/img.naturalHeight);
+    const clamp=()=>{const w=img.naturalWidth*baseScale*state.zoom,h=img.naturalHeight*baseScale*state.zoom;const maxX=Math.max(0,(w-canvas.width)/2),maxY=Math.max(0,(h-canvas.height)/2);state.offsetX=Math.max(-maxX,Math.min(maxX,state.offsetX));state.offsetY=Math.max(-maxY,Math.min(maxY,state.offsetY));};
+    const draw=()=>{clamp();ctx.fillStyle='#020711';ctx.fillRect(0,0,canvas.width,canvas.height);const w=img.naturalWidth*baseScale*state.zoom,h=img.naturalHeight*baseScale*state.zoom;ctx.drawImage(img,(canvas.width-w)/2+state.offsetX,(canvas.height-h)/2+state.offsetY,w,h);};
+    const point=e=>{const r=canvas.getBoundingClientRect();return {x:(e.clientX-r.left)*(canvas.width/r.width),y:(e.clientY-r.top)*(canvas.height/r.height)}};
+    canvas.addEventListener('pointerdown',e=>{canvas.setPointerCapture(e.pointerId);const p=point(e);state.drag=true;state.startX=p.x;state.startY=p.y;state.startOffsetX=state.offsetX;state.startOffsetY=state.offsetY;canvas.classList.add('dragging')});
+    canvas.addEventListener('pointermove',e=>{if(!state.drag)return;const p=point(e);state.offsetX=state.startOffsetX+(p.x-state.startX);state.offsetY=state.startOffsetY+(p.y-state.startY);draw()});
+    const endDrag=()=>{state.drag=false;canvas.classList.remove('dragging')};canvas.addEventListener('pointerup',endDrag);canvas.addEventListener('pointercancel',endDrag);
+    zoomInput.addEventListener('input',()=>{const old=state.zoom;state.zoom=Number(zoomInput.value);if(old>0){state.offsetX*=state.zoom/old;state.offsetY*=state.zoom/old}draw()});
+    canvas.addEventListener('wheel',e=>{e.preventDefault();const next=Math.max(1,Math.min(3,state.zoom+(e.deltaY<0?.08:-.08)));zoomInput.value=String(next);zoomInput.dispatchEvent(new Event('input'))},{passive:false});
+    const finish=value=>{URL.revokeObjectURL(decoded.url);wrap.remove();resolve(value)};
+    wrap.querySelector('.modal-close').onclick=()=>finish(null);wrap.querySelector('.crop-cancel').onclick=()=>finish(null);wrap.onclick=e=>{if(e.target===wrap)finish(null)};
+    wrap.querySelector('.crop-save').onclick=async()=>{
+      const save=wrap.querySelector('.crop-save');save.disabled=true;save.textContent='VERARBEITE…';
+      try{
+        const out=document.createElement('canvas');out.width=rule.width;out.height=rule.height;const outCtx=out.getContext('2d',{alpha:false});outCtx.fillStyle='#020711';outCtx.fillRect(0,0,out.width,out.height);
+        const scale=Math.max(out.width/img.naturalWidth,out.height/img.naturalHeight)*state.zoom;
+        const factorX=out.width/canvas.width,factorY=out.height/canvas.height;
+        const w=img.naturalWidth*scale,h=img.naturalHeight*scale;
+        outCtx.imageSmoothingEnabled=true;outCtx.imageSmoothingQuality='high';
+        outCtx.drawImage(img,(out.width-w)/2+state.offsetX*factorX,(out.height-h)/2+state.offsetY*factorY,w,h);
+        const blob=await compressCanvas(out,rule.maxBytes,rule.quality);finish(blob);
+      }catch(err){save.disabled=false;save.textContent='SPEICHERN';toast(err.message,'error')}
+    };
+    draw();
+  });
+}
+
+function bindCropInput(input,kind,store,status){
+  input?.addEventListener('change',async()=>{
+    const file=input.files?.[0];if(!file)return;
+    try{
+      status.textContent='Editor wird geöffnet…';
+      const blob=await openImageEditor(file,kind);
+      if(blob){store[kind]=blob;status.textContent=`✓ Optimiert: ${imageRule(kind).width}×${imageRule(kind).height}px • ${humanBytes(blob.size)}`;status.classList.add('ready')}
+      else status.textContent='Keine Änderung ausgewählt.';
+    }catch(err){status.textContent=err.message;status.classList.remove('ready');toast(err.message,'error')}
+    input.value='';
+  });
+}
+
+async function uploadProcessedImage(kind,blob,clubSlug=''){
+  if(!blob)return null;
+  const fd=new FormData();fd.append('kind',kind);if(clubSlug)fd.append('clubSlug',clubSlug);fd.append('file',new File([blob],`${kind}.webp`,{type:'image/webp'}));
+  const r=await fetch('/api/upload',{method:'POST',credentials:'include',body:fd});const d=await r.json().catch(()=>({}));if(!r.ok)throw new Error(d.error||'Upload fehlgeschlagen.');return d;
+}
+
 function bindPage(p){
   bindHeroSlider();
   document.querySelector('#playerSearch')?.addEventListener('input',e=>{const q=e.target.value.toLowerCase(); document.querySelector('#playersGrid').innerHTML = playersCards(state.live.players.filter(x=>`${x.username} ${clubName(x)}`.toLowerCase().includes(q)));});
@@ -201,7 +284,20 @@ function bindPage(p){
   document.querySelector('#loginForm') && bindLogin();
   document.querySelectorAll('[data-buy-item]').forEach(b=>b.addEventListener('click',()=>buyItem(Number(b.dataset.buyItem),b)));
   document.querySelectorAll('[data-coin-pack]').forEach(b=>b.addEventListener('click',()=>buyCoins(b.dataset.coinPack)));
-  document.querySelector('[data-edit-profile]')?.addEventListener('click',()=>{const m=modal('Profil bearbeiten',`<form id="profileEditForm"><div class="form-grid"><div class="field full"><label>Bio</label><textarea name="bio" rows="4"></textarea></div><div class="field"><label>EA ID</label><input name="eaId"></div><div class="field"><label>Discord</label><input name="discord"></div><div class="field"><label>Hauptposition</label><select name="position">${POSITIONS.map(x=>`<option>${x}</option>`).join('')}</select></div><div class="field"><label>Nebenposition</label><select name="secondaryPosition">${POSITIONS.map(x=>`<option>${x}</option>`).join('')}</select></div><div class="field"><label>Profilbild</label><input type="file" name="avatar" accept="image/png,image/jpeg,image/webp"></div><div class="field"><label>Titelbild</label><input type="file" name="cover" accept="image/png,image/jpeg,image/webp"></div><div class="field full"><label><input type="checkbox" name="freeAgent"> Als Free Agent anzeigen</label></div></div><div class="form-actions"><button class="btn btn-primary">SPEICHERN</button></div></form>`);m.querySelector('form').onsubmit=async e=>{e.preventDefault(); const f=e.target; try{await api('/api/profile',{method:'POST',body:JSON.stringify({bio:f.bio.value,eaId:f.eaId.value,discord:f.discord.value,position:f.position.value,secondaryPosition:f.secondaryPosition.value,freeAgent:f.freeAgent.checked})}); for(const [kind,input] of [['avatar',f.avatar],['cover',f.cover]]){ if(input.files[0]){ const fd=new FormData(); fd.append('kind',kind); fd.append('file',input.files[0]); const r=await fetch('/api/upload',{method:'POST',credentials:'include',body:fd}); if(!r.ok){const d=await r.json().catch(()=>({})); throw new Error(d.error||'Upload fehlgeschlagen.');}} } toast('Profil wurde aktualisiert.');m.remove();}catch(err){toast(err.message,'error')}}});
+  document.querySelector('[data-edit-profile]')?.addEventListener('click',()=>{
+    const m=modal('Profil bearbeiten',`<form id="profileEditForm"><div class="form-grid"><div class="field full"><label>Bio</label><textarea name="bio" rows="4"></textarea></div><div class="field"><label>EA ID</label><input name="eaId"></div><div class="field"><label>Discord</label><input name="discord"></div><div class="field"><label>Hauptposition</label><select name="position">${POSITIONS.map(x=>`<option>${x}</option>`).join('')}</select></div><div class="field"><label>Nebenposition</label><select name="secondaryPosition">${POSITIONS.map(x=>`<option>${x}</option>`).join('')}</select></div><div class="field media-field"><label>Profilbild</label><input type="file" name="avatar" accept="image/png,image/jpeg,image/webp"><small data-crop-status="avatar">Wird auf 512×512 WebP optimiert.</small></div><div class="field media-field"><label>Titelbild</label><input type="file" name="cover" accept="image/png,image/jpeg,image/webp"><small data-crop-status="cover">Wird auf 1600×500 WebP optimiert.</small></div><div class="field full"><label><input type="checkbox" name="freeAgent"> Als Free Agent anzeigen</label></div></div><div class="form-actions"><button class="btn btn-primary">SPEICHERN</button></div></form>`);
+    const f=m.querySelector('form'),processed={};
+    bindCropInput(f.avatar,'avatar',processed,m.querySelector('[data-crop-status="avatar"]'));
+    bindCropInput(f.cover,'cover',processed,m.querySelector('[data-crop-status="cover"]'));
+    f.onsubmit=async e=>{e.preventDefault();const submit=f.querySelector('button[type="submit"],.btn-primary');submit.disabled=true;submit.textContent='SPEICHERT…';try{await api('/api/profile',{method:'POST',body:JSON.stringify({bio:f.bio.value,eaId:f.eaId.value,discord:f.discord.value,position:f.position.value,secondaryPosition:f.secondaryPosition.value,freeAgent:f.freeAgent.checked})});await uploadProcessedImage('avatar',processed.avatar);await uploadProcessedImage('cover',processed.cover);toast('Profil wurde aktualisiert.');m.remove();const slug=path().split('/')[2];if(slug)hydratePlayerProfile(slug);}catch(err){submit.disabled=false;submit.textContent='SPEICHERN';toast(err.message,'error')}};
+  });
+  document.querySelector('[data-club-media]')?.addEventListener('click',()=>{
+    const clubSlug=path().split('/')[2]||'';const m=modal('Club Medien bearbeiten',`<form id="clubMediaForm"><p class="muted">Logo und Titelbild werden vor dem Upload zugeschnitten, verkleinert und als WebP gespeichert.</p><div class="form-grid"><div class="field media-field"><label>Clublogo</label><input type="file" name="logo" accept="image/png,image/jpeg,image/webp"><small data-crop-status="club-logo">Wird auf 512×512 WebP optimiert.</small></div><div class="field media-field"><label>Club-Titelbild</label><input type="file" name="cover" accept="image/png,image/jpeg,image/webp"><small data-crop-status="club-cover">Wird auf 1600×500 WebP optimiert.</small></div></div><div class="form-actions"><button type="button" class="btn btn-ghost" data-close-media>ABBRECHEN</button><button class="btn btn-primary">SPEICHERN</button></div></form>`);
+    const f=m.querySelector('form'),processed={};m.querySelector('[data-close-media]').onclick=()=>m.remove();
+    bindCropInput(f.logo,'club-logo',processed,m.querySelector('[data-crop-status="club-logo"]'));
+    bindCropInput(f.cover,'club-cover',processed,m.querySelector('[data-crop-status="club-cover"]'));
+    f.onsubmit=async e=>{e.preventDefault();if(!processed['club-logo']&&!processed['club-cover'])return toast('Bitte zuerst ein Logo oder Titelbild auswählen.','error');const submit=f.querySelector('.btn-primary');submit.disabled=true;submit.textContent='LÄDT HOCH…';try{await uploadProcessedImage('club-logo',processed['club-logo'],clubSlug);await uploadProcessedImage('club-cover',processed['club-cover'],clubSlug);toast('Clubmedien wurden aktualisiert.');m.remove();hydrateClubProfile(clubSlug);}catch(err){submit.disabled=false;submit.textContent='SPEICHERN';toast(err.message,'error')}};
+  });
   if(p.startsWith('/spieler/')) hydratePlayerProfile(decodeURIComponent(p.split('/')[2]||''));
   if(p.startsWith('/club/')) hydrateClubProfile(decodeURIComponent(p.split('/')[2]||''));
 }

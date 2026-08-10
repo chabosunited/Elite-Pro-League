@@ -327,3 +327,20 @@ MEDIA  → epl-media
 **KV wird für diese Version nicht benötigt.**
 
 Nach dem Hinzufügen oder Ändern eines Bindings das Pages-Projekt erneut deployen, damit die Bindings in `context.env` verfügbar sind.
+
+## Bild-Uploads: Zuschneiden + automatische Optimierung
+
+Profilbilder, Clublogos und Titelbilder werden im Browser vor dem Upload bearbeitet und verkleinert:
+
+- Profilbild: 512 × 512 px, WebP, maximal ca. 600 KB
+- Clublogo: 512 × 512 px, WebP, maximal ca. 600 KB
+- Spieler-Titelbild: 1600 × 500 px, WebP, maximal ca. 1.2 MB
+- Club-Titelbild: 1600 × 500 px, WebP, maximal ca. 1.2 MB
+- Original-Upload: maximal 10 MB, JPG/PNG/WebP
+
+Der Nutzer erhält einen Editor zum Verschieben und Zoomen. Erst das zugeschnittene WebP wird an `/api/upload` gesendet. Die API akzeptiert für diese Uploads nur optimierte WebP-Dateien innerhalb der Limits und löscht beim Ersetzen eines Profil-/Clubbildes nach Möglichkeit die alte R2-Datei, damit der Speicher nicht unnötig wächst.
+
+Für produktive Uploads muss im Cloudflare-Pages-Projekt ein R2-Binding gesetzt sein:
+
+- Variable: `MEDIA`
+- Bucket: `epl-media`
