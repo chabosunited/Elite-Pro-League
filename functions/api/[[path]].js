@@ -71,12 +71,39 @@ async function verifyPassword(password, stored){
   const got=b64url(new Uint8Array(bits)); if(got.length!==expected.length)return false; let diff=0;for(let i=0;i<got.length;i++)diff|=got.charCodeAt(i)^expected.charCodeAt(i);return diff===0;
 }
 async function verifyTurnstile(request,env,token){
-  if(!env.TURNSTILE_SECRET)return true;
-  if(!token)return false;
-  const body=new URLSearchParams({secret:env.TURNSTILE_SECRET,response:token});
-  const ip=request.headers.get('CF-Connecting-IP');if(ip)body.set('remoteip',ip);
-  const res=await fetch('https://challenges.cloudflare.com/turnstile/v0/siteverify',{method:'POST',body});
-  const out=await res.json();return !!out.success;
+  const secret=String(env.TURNSTILE_SECRET||'').trim();
+  const responseToken=String(token||'').trim();
+  if(!secret)return {success:false,'error-codes':['missing-input-secret']};
+  if(!responseToken)return {success:false,'error-codes':['missing-input-response']};
+
+  const payload={
+    secret,
+    response:responseToken,
+    idempotency_key:crypto.randomUUID()
+  };
+  const ip=request.headers.get('CF-Connecting-IP');
+  if(ip)payload.remoteip=ip;
+
+  try{
+    const res=await fetch('https://challenges.cloudflare.com/turnstile/v0/siteverify',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify(payload)
+    });
+    const out=await res.json();
+    if(!out.success){
+      console.error('Turnstile Siteverify failed',JSON.stringify({
+        httpStatus:res.status,
+        errors:out['error-codes']||[],
+        hostname:out.hostname||null,
+        action:out.action||null
+      }));
+    }
+    return out;
+  }catch(error){
+    console.error('Turnstile Siteverify request error',error);
+    return {success:false,'error-codes':['internal-error']};
+  }
 }
 async function currentUser(request,env){
   const db=requireDb(env), sid=cookieMap(request).epl_session;if(!sid)return null;
@@ -90,7 +117,11 @@ function httpError(message,status){const e=new Error(message);e.status=status;re
 
 async function register(request,env){
   const db=requireDb(env), body=await request.json();
-  if(!(await verifyTurnstile(request,env,body.turnstileToken))) return fail('Turnstile-Prüfung fehlgeschlagen.',403);
+  const turnstile=await verifyTurnstile(request,env,body.turnstileToken);
+  if(!turnstile.success){
+    const codes=(turnstile['error-codes']||['unknown-error']).join(', ');
+    return fail(`Turnstile-Prüfung fehlgeschlagen: ${codes}`,403);
+  }
   const username=cleanText(body.username,24), email=cleanText(body.email,160).toLowerCase(), password=String(body.password||'');
   if(!/^[A-Za-z0-9_.-]{3,24}$/.test(username))return fail('Username: 3–24 Zeichen, nur Buchstaben, Zahlen, _ . -');
   if(!/^\S+@\S+\.\S+$/.test(email))return fail('Ungültige E-Mail-Adresse.');
@@ -107,7 +138,12 @@ async function register(request,env){
   return json({user:{id:userId,email,username,role:'PLAYER',coins:0}},201,{'set-cookie':secureCookie(sid,maxAge)});
 }
 async function login(request,env){
-  const db=requireDb(env), body=await request.json();if(!(await verifyTurnstile(request,env,body.turnstileToken)))return fail('Turnstile-Prüfung fehlgeschlagen.',403);
+  const db=requireDb(env), body=await request.json();
+  const turnstile=await verifyTurnstile(request,env,body.turnstileToken);
+  if(!turnstile.success){
+    const codes=(turnstile['error-codes']||['unknown-error']).join(', ');
+    return fail(`Turnstile-Prüfung fehlgeschlagen: ${codes}`,403);
+  }
   const login=cleanText(body.login,160), password=String(body.password||'');
   const row=await db.prepare(`SELECT u.*,COALESCE(w.balance,0) coins FROM users u LEFT JOIN coin_wallets w ON w.user_id=u.id WHERE u.email=? COLLATE NOCASE OR u.username=? COLLATE NOCASE`).bind(login,login).first();
   if(!row || !(await verifyPassword(password,row.password_hash)))return fail('Login-Daten sind falsch.',401);if(row.status!=='ACTIVE')return fail('Account ist gesperrt.',403);
