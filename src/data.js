@@ -73,8 +73,8 @@ export const demo = {
     { image: '/assets/user/icon5.png', title: 'Manager-System', text: 'Organisiere dein Team, manage Verträge und führe deinen Club zum Erfolg.' }
   ],
   shop: [
-    { id: 1, name: 'NEON BLUE', type: 'Profilbildrahmen', price: 750, image: '/assets/user/Profilrahmen1.png', rarity: 'EPIC' },
-    { id: 2, name: 'ELITE GOLD', type: 'Titelbildrahmen', price: 1250, image: '/assets/user/Titelbildrahmen1.png', rarity: 'LEGENDARY' },
+    { id: 1, name: 'NEON BLUE', type: 'Profilbildrahmen', price: 750, image: '/assets/user/shop/Profibildrahmen1.png', rarity: 'EPIC' },
+    { id: 2, name: 'ELITE GOLD', type: 'Titelbildrahmen', price: 1250, image: '/assets/user/shop/titelbildrahmen1.png', rarity: 'LEGENDARY' },
     { id: 3, name: 'LIGHTNING', type: 'Namenseffekt', price: 1000, image: '/assets/user/Namenseffekt1.png', rarity: 'EPIC' },
     { id: 4, name: 'EPL CHAMPION', type: 'Badge', price: 1500, image: '/assets/user/EPLTrophy.png', rarity: 'LEGENDARY' }
   ],

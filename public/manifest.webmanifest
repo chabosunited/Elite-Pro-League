@@ -1,0 +1,12 @@
+{
+  "name": "EPL - Elite Pro League",
+  "short_name": "EPL",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#020812",
+  "theme_color": "#030914",
+  "description": "Elite Pro League - Pro Clubs Liga & Social Network",
+  "icons": [
+    {"src":"/assets/user/logo.png","sizes":"any","type":"image/png","purpose":"any maskable"}
+  ]
+}

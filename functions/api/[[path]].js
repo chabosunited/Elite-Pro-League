@@ -37,6 +37,12 @@ export async function onRequest(context){
     if(route === 'goals' && method === 'GET') return getSeasonGoals(request,env);
     if(route === 'goals/select' && method === 'POST') return selectPlayerGoals(request,env);
     if(route === 'shop/equip' && method === 'POST') return equipItem(request,env);
+    if(route === 'shop/remove-owned' && method === 'POST') return removeOwnedItem(request,env);
+    if(route === 'social/like-target' && method === 'POST') return toggleTargetLike(request,env);
+    if(route === 'messages' && method === 'GET') return listConversations(request,env);
+    if(route === 'messages/start' && method === 'POST') return startConversation(request,env);
+    if(/^messages\/\d+$/.test(route) && method === 'GET') return getConversationMessages(route,request,env);
+    if(/^messages\/\d+\/send$/.test(route) && method === 'POST') return sendConversationMessage(route,request,env);
     if(route === 'clubs' && method === 'POST') return createClub(request,env);
     if(route === 'applications' && method === 'POST') return createApplication(request,env);
     if(route === 'contracts' && method === 'POST') return createContract(request,env);
@@ -56,6 +62,11 @@ export async function onRequest(context){
     if(route === 'players' && method === 'GET') return listPlayers(env);
     if(route === 'clubs' && method === 'GET') return listClubs(env);
     if(route === 'news' && method === 'GET') return listNews(env);
+    if(/^news\/[^/]+\/social$/.test(route) && method === 'GET') return getNewsSocial(route,request,env);
+    if(/^news\/[^/]+\/reaction$/.test(route) && method === 'POST') return newsReaction(route,request,env);
+    if(/^news\/[^/]+\/comments$/.test(route) && method === 'GET') return getNewsComments(route,request,env);
+    if(/^news\/[^/]+\/comments$/.test(route) && method === 'POST') return createNewsComment(route,request,env);
+    if(/^news-comments\/\d+\/like$/.test(route) && method === 'POST') return newsCommentLike(route,request,env);
     if(route.startsWith('news/') && method === 'GET') return getNewsArticle(route.slice(5),env);
     if(route === 'transfers' && method === 'GET') return listTransfers(env);
     if(/^posts\/\d+\/reaction$/.test(route) && method === 'POST') return postReaction(route,request,env);
@@ -222,7 +233,7 @@ async function uniqueUsername(db,value,providerId){
 }
 async function currentUser(request,env){
   const db=requireDb(env), sid=cookieMap(request).epl_session;if(!sid)return null;
-  const row=await db.prepare(`SELECT u.id,u.email,u.username,u.role,u.status,p.avatar_key,p.cover_key,p.ea_id,p.platform,p.position,p.secondary_position,p.country,p.bio,p.discord,p.free_agent,p.equipped_avatar_frame_id,p.equipped_cover_frame_id,p.equipped_name_effect_id,
+  const row=await db.prepare(`SELECT u.id,u.email,u.username,u.role,u.status,p.avatar_key,p.cover_key,p.ea_id,p.platform,p.position,p.secondary_position,p.country,p.bio,p.discord,p.free_agent,p.equipped_avatar_frame_id,p.equipped_cover_frame_id,p.equipped_name_effect_id,p.equipped_badge_id,
       COALESCE(w.balance,0) AS coins,COALESCE(po.shirt_number,0) AS shirt_number,
       COALESCE(po.completed,CASE WHEN length(trim(COALESCE(p.ea_id,'')))>0 AND length(trim(COALESCE(p.position,'')))>0 THEN 1 ELSE 0 END) AS profile_completed
     FROM sessions s JOIN users u ON u.id=s.user_id LEFT JOIN profiles p ON p.user_id=u.id LEFT JOIN coin_wallets w ON w.user_id=u.id LEFT JOIN profile_onboarding po ON po.user_id=u.id
@@ -333,9 +344,9 @@ async function equipItem(request,env){
   const db=requireDb(env),u=await requireUser(request,env),b=await request.json();
   const slot=cleanText(b.slot,30),itemId=b.itemId===null||b.itemId===''?null:Number(b.itemId);
   const slots={
-    avatar_frame:{category:'AVATAR_FRAME',col:'equipped_avatar_frame_id'},
-    cover_frame:{category:'COVER_FRAME',col:'equipped_cover_frame_id'},
-    name_effect:{category:'NAME_EFFECT',col:'equipped_name_effect_id'},
+    avatar_frame:{category:'AVATAR_FRAME',col:'equipped_avatar_frame_id'},avatarFrame:{category:'AVATAR_FRAME',col:'equipped_avatar_frame_id'},
+    cover_frame:{category:'COVER_FRAME',col:'equipped_cover_frame_id'},coverFrame:{category:'COVER_FRAME',col:'equipped_cover_frame_id'},
+    name_effect:{category:'NAME_EFFECT',col:'equipped_name_effect_id'},nameEffect:{category:'NAME_EFFECT',col:'equipped_name_effect_id'},
     badge:{category:'BADGE',col:'equipped_badge_id'}
   };
   const cfg=slots[slot];if(!cfg)return fail('Ungültiger Cosmetic-Slot.');
@@ -348,6 +359,101 @@ async function equipItem(request,env){
   await db.prepare(`UPDATE profiles SET ${cfg.col}=?,updated_at=datetime('now') WHERE user_id=?`).bind(itemId,u.id).run();
   await db.prepare(`UPDATE user_inventory SET equipped=CASE WHEN item_id=? THEN 1 ELSE 0 END WHERE user_id=? AND item_id IN (SELECT id FROM shop_items WHERE category=?)`).bind(itemId||-1,u.id,cfg.category).run();
   return getInventory(request,env);
+}
+
+
+async function removeOwnedItem(request,env){
+  const db=requireDb(env),u=await requireUser(request,env),b=await request.json(),itemId=Number(b.itemId);
+  if(!Number.isInteger(itemId)||itemId<=0)return fail('Ungültiges Shop-Item.');
+  const item=await db.prepare(`SELECT si.id,si.name,si.category FROM user_inventory ui JOIN shop_items si ON si.id=ui.item_id WHERE ui.user_id=? AND ui.item_id=?`).bind(u.id,itemId).first();
+  if(!item)return fail('Dieser Inhalt befindet sich nicht in deinem Inventar.',404);
+  const col={AVATAR_FRAME:'equipped_avatar_frame_id',COVER_FRAME:'equipped_cover_frame_id',NAME_EFFECT:'equipped_name_effect_id',BADGE:'equipped_badge_id'}[item.category];
+  const stmts=[];
+  if(col)stmts.push(db.prepare(`UPDATE profiles SET ${col}=NULL,updated_at=datetime('now') WHERE user_id=? AND ${col}=?`).bind(u.id,itemId));
+  stmts.push(db.prepare('DELETE FROM user_inventory WHERE user_id=? AND item_id=?').bind(u.id,itemId));
+  await db.batch(stmts);
+  return json({ok:true,itemId,name:item.name});
+}
+
+async function toggleTargetLike(request,env){
+  const db=requireDb(env),u=await requireUser(request,env),b=await request.json(),type=cleanText(b.type,12).toLowerCase(),slug=cleanText(b.slug,60).toLowerCase();
+  if(type==='player'){
+    const target=await db.prepare('SELECT id FROM users WHERE lower(username)=?').bind(slug).first();if(!target)return fail('Spieler nicht gefunden.',404);if(target.id===u.id)return fail('Du kannst dein eigenes Profil nicht liken.',409);
+    const exists=await db.prepare('SELECT 1 FROM profile_likes WHERE user_id=? AND target_user_id=?').bind(u.id,target.id).first();
+    if(exists)await db.prepare('DELETE FROM profile_likes WHERE user_id=? AND target_user_id=?').bind(u.id,target.id).run();else await db.prepare('INSERT INTO profile_likes(user_id,target_user_id) VALUES(?,?)').bind(u.id,target.id).run();
+    const c=await db.prepare('SELECT COUNT(*) count FROM profile_likes WHERE target_user_id=?').bind(target.id).first();return json({liked:!exists,count:c.count||0});
+  }
+  if(type==='club'){
+    const target=await db.prepare('SELECT id FROM clubs WHERE lower(slug)=?').bind(slug).first();if(!target)return fail('Club nicht gefunden.',404);
+    const exists=await db.prepare('SELECT 1 FROM club_likes WHERE user_id=? AND club_id=?').bind(u.id,target.id).first();
+    if(exists)await db.prepare('DELETE FROM club_likes WHERE user_id=? AND club_id=?').bind(u.id,target.id).run();else await db.prepare('INSERT INTO club_likes(user_id,club_id) VALUES(?,?)').bind(u.id,target.id).run();
+    const c=await db.prepare('SELECT COUNT(*) count FROM club_likes WHERE club_id=?').bind(target.id).first();return json({liked:!exists,count:c.count||0});
+  }
+  return fail('Ungültiger Like-Typ.');
+}
+
+async function resolveMessageTarget(db,b,u){
+  const type=cleanText(b.targetType,12).toLowerCase(),slug=cleanText(b.slug,60).toLowerCase();
+  if(type==='player'){
+    const target=await db.prepare('SELECT id,username FROM users WHERE lower(username)=? AND status=\'ACTIVE\'').bind(slug).first();if(!target)return null;return target;
+  }
+  if(type==='club'){
+    const target=await db.prepare(`SELECT u.id,u.username FROM clubs c JOIN users u ON u.id=c.manager_user_id WHERE lower(c.slug)=? AND u.status='ACTIVE'`).bind(slug).first();if(!target)return null;return target;
+  }
+  return null;
+}
+async function startConversation(request,env){
+  const db=requireDb(env),u=await requireUser(request,env),b=await request.json(),target=await resolveMessageTarget(db,b,u);
+  if(!target)return fail('Empfänger nicht gefunden.',404);if(target.id===u.id)return fail('Du kannst dir nicht selbst schreiben.',409);
+  const a=Math.min(u.id,target.id),z=Math.max(u.id,target.id);
+  await db.prepare(`INSERT INTO conversations(user_a,user_b) VALUES(?,?) ON CONFLICT(user_a,user_b) DO UPDATE SET updated_at=updated_at`).bind(a,z).run();
+  const c=await db.prepare('SELECT id FROM conversations WHERE user_a=? AND user_b=?').bind(a,z).first();return json({conversationId:c.id,target});
+}
+async function listConversations(request,env){
+  const db=requireDb(env),u=await requireUser(request,env);
+  const r=await db.prepare(`SELECT c.id,c.updated_at,other.id other_user_id,other.username,p.avatar_key,CASE WHEN p.last_seen_at>=datetime('now','-2 minutes') THEN 1 ELSE 0 END is_online,
+      (SELECT body FROM direct_messages dm WHERE dm.conversation_id=c.id AND dm.deleted_at IS NULL ORDER BY dm.id DESC LIMIT 1) last_message,
+      (SELECT created_at FROM direct_messages dm WHERE dm.conversation_id=c.id AND dm.deleted_at IS NULL ORDER BY dm.id DESC LIMIT 1) last_message_at,
+      (SELECT COUNT(*) FROM direct_messages dm WHERE dm.conversation_id=c.id AND dm.sender_user_id<>? AND dm.read_at IS NULL AND dm.deleted_at IS NULL) unread
+    FROM conversations c JOIN users other ON other.id=CASE WHEN c.user_a=? THEN c.user_b ELSE c.user_a END LEFT JOIN profiles p ON p.user_id=other.id
+    WHERE c.user_a=? OR c.user_b=? ORDER BY COALESCE(last_message_at,c.updated_at) DESC`).bind(u.id,u.id,u.id,u.id).all();return json({conversations:r.results||[]});
+}
+async function getConversationMessages(route,request,env){
+  const db=requireDb(env),u=await requireUser(request,env),id=Number(route.split('/')[1]);
+  const c=await db.prepare('SELECT * FROM conversations WHERE id=? AND (user_a=? OR user_b=?)').bind(id,u.id,u.id).first();if(!c)return fail('Unterhaltung nicht gefunden.',404);
+  await db.prepare(`UPDATE direct_messages SET read_at=datetime('now') WHERE conversation_id=? AND sender_user_id<>? AND read_at IS NULL`).bind(id,u.id).run();
+  const r=await db.prepare(`SELECT dm.id,dm.body,dm.created_at,dm.read_at,dm.sender_user_id,u.username,p.avatar_key FROM direct_messages dm JOIN users u ON u.id=dm.sender_user_id LEFT JOIN profiles p ON p.user_id=u.id WHERE dm.conversation_id=? AND dm.deleted_at IS NULL ORDER BY dm.id ASC LIMIT 300`).bind(id).all();
+  const otherId=c.user_a===u.id?c.user_b:c.user_a,other=await db.prepare(`SELECT u.id,u.username,p.avatar_key,CASE WHEN p.last_seen_at>=datetime('now','-2 minutes') THEN 1 ELSE 0 END is_online FROM users u LEFT JOIN profiles p ON p.user_id=u.id WHERE u.id=?`).bind(otherId).first();
+  return json({conversation:{id,other},messages:r.results||[]});
+}
+async function sendConversationMessage(route,request,env){
+  const db=requireDb(env),u=await requireUser(request,env),id=Number(route.split('/')[1]),b=await request.json(),body=cleanText(b.body,3000);
+  if(!body)return fail('Nachricht ist leer.');const c=await db.prepare('SELECT id FROM conversations WHERE id=? AND (user_a=? OR user_b=?)').bind(id,u.id,u.id).first();if(!c)return fail('Unterhaltung nicht gefunden.',404);
+  const r=await db.prepare('INSERT INTO direct_messages(conversation_id,sender_user_id,body) VALUES(?,?,?)').bind(id,u.id,body).run();await db.prepare(`UPDATE conversations SET updated_at=datetime('now') WHERE id=?`).bind(id).run();return json({ok:true,id:r.meta.last_row_id});
+}
+
+function newsSlugFromRoute(route){return decodeURIComponent(route.split('/')[1]||'');}
+async function getNewsSocial(route,request,env){
+  const db=requireDb(env),viewer=await currentUser(request,env),slug=newsSlugFromRoute(route),n=await db.prepare(`SELECT id FROM news WHERE slug=? AND status='PUBLISHED'`).bind(slug).first();if(!n)return fail('News nicht gefunden.',404);
+  const counts=await db.prepare(`SELECT COUNT(*) total,SUM(CASE WHEN reaction='LIKE' THEN 1 ELSE 0 END) likes,SUM(CASE WHEN reaction='FIRE' THEN 1 ELSE 0 END) fires,SUM(CASE WHEN reaction='CLAP' THEN 1 ELSE 0 END) claps,SUM(CASE WHEN reaction='GOAL' THEN 1 ELSE 0 END) goals FROM news_reactions WHERE news_id=?`).bind(n.id).first();
+  let mine=null;if(viewer)mine=(await db.prepare('SELECT reaction FROM news_reactions WHERE news_id=? AND user_id=?').bind(n.id,viewer.id).first())?.reaction||null;
+  return json({counts:counts||{},myReaction:mine});
+}
+async function newsReaction(route,request,env){
+  const db=requireDb(env),u=await requireUser(request,env),slug=newsSlugFromRoute(route),b=await request.json(),reaction=cleanText(b.reaction,10).toUpperCase();if(!['LIKE','FIRE','CLAP','GOAL'].includes(reaction))return fail('Ungültige Reaktion.');
+  const n=await db.prepare(`SELECT id FROM news WHERE slug=? AND status='PUBLISHED'`).bind(slug).first();if(!n)return fail('News nicht gefunden.',404);const old=await db.prepare('SELECT reaction FROM news_reactions WHERE news_id=? AND user_id=?').bind(n.id,u.id).first();
+  if(old?.reaction===reaction)await db.prepare('DELETE FROM news_reactions WHERE news_id=? AND user_id=?').bind(n.id,u.id).run();else await db.prepare(`INSERT INTO news_reactions(news_id,user_id,reaction) VALUES(?,?,?) ON CONFLICT(news_id,user_id) DO UPDATE SET reaction=excluded.reaction,created_at=datetime('now')`).bind(n.id,u.id,reaction).run();return getNewsSocial(route.replace('/reaction','/social'),request,env);
+}
+async function getNewsComments(route,request,env){
+  const db=requireDb(env),viewer=await currentUser(request,env),slug=newsSlugFromRoute(route),n=await db.prepare(`SELECT id FROM news WHERE slug=? AND status='PUBLISHED'`).bind(slug).first();if(!n)return fail('News nicht gefunden.',404);
+  const r=await db.prepare(`SELECT c.id,c.body,c.parent_comment_id,c.created_at,u.username,p.avatar_key,CASE WHEN p.last_seen_at>=datetime('now','-2 minutes') THEN 1 ELSE 0 END is_online,(SELECT COUNT(*) FROM news_comment_likes l WHERE l.comment_id=c.id) likes,${viewer?'EXISTS(SELECT 1 FROM news_comment_likes l2 WHERE l2.comment_id=c.id AND l2.user_id=?)':'0'} liked FROM news_comments c JOIN users u ON u.id=c.user_id LEFT JOIN profiles p ON p.user_id=u.id WHERE c.news_id=? ORDER BY c.created_at ASC`).bind(...(viewer?[viewer.id,n.id]:[n.id])).all();return json({comments:r.results||[]});
+}
+async function createNewsComment(route,request,env){
+  const db=requireDb(env),u=await requireUser(request,env),slug=newsSlugFromRoute(route),b=await request.json(),body=cleanText(b.body,1500),parentId=b.parentId?Number(b.parentId):null;if(!body)return fail('Kommentar ist leer.');const n=await db.prepare(`SELECT id FROM news WHERE slug=? AND status='PUBLISHED'`).bind(slug).first();if(!n)return fail('News nicht gefunden.',404);
+  if(parentId){const parent=await db.prepare('SELECT id FROM news_comments WHERE id=? AND news_id=?').bind(parentId,n.id).first();if(!parent)return fail('Antwort-Kommentar nicht gefunden.',404);}const r=await db.prepare('INSERT INTO news_comments(news_id,user_id,body,parent_comment_id) VALUES(?,?,?,?)').bind(n.id,u.id,body,parentId).run();return json({ok:true,id:r.meta.last_row_id});
+}
+async function newsCommentLike(route,request,env){
+  const db=requireDb(env),u=await requireUser(request,env),id=Number(route.split('/')[1]),c=await db.prepare('SELECT id FROM news_comments WHERE id=?').bind(id).first();if(!c)return fail('Kommentar nicht gefunden.',404);const x=await db.prepare('SELECT 1 FROM news_comment_likes WHERE comment_id=? AND user_id=?').bind(id,u.id).first();if(x)await db.prepare('DELETE FROM news_comment_likes WHERE comment_id=? AND user_id=?').bind(id,u.id).run();else await db.prepare('INSERT INTO news_comment_likes(comment_id,user_id) VALUES(?,?)').bind(id,u.id).run();const n=await db.prepare('SELECT COUNT(*) count FROM news_comment_likes WHERE comment_id=?').bind(id).first();return json({liked:!x,count:n.count||0});
 }
 
 async function follow(request,env){
@@ -786,6 +892,8 @@ async function getProfile(slug,request,env){
     LEFT JOIN club_members cm ON cm.user_id=u.id AND cm.left_at IS NULL LEFT JOIN clubs c ON c.id=cm.club_id
     WHERE lower(u.username)=?`).bind(slug.toLowerCase()).first();
   if(!p)return fail('Spieler nicht gefunden.',404);
+  const likeCount=await db.prepare('SELECT COUNT(*) count FROM profile_likes WHERE target_user_id=?').bind(p.id).first();
+  p.profile_likes=likeCount?.count||0;p.viewer_liked=viewer?!!(await db.prepare('SELECT 1 FROM profile_likes WHERE user_id=? AND target_user_id=?').bind(viewer.id,p.id).first()):false;
   const [stats,posts,recentMatches,achievements,clubHistory,badges]=await Promise.all([
     db.prepare(`SELECT COUNT(*) matches,COALESCE(SUM(goals),0) goals,COALESCE(SUM(assists),0) assists,ROUND(AVG(rating),2) rating,
       COALESCE(SUM(saves),0) saves,COALESCE(SUM(clean_sheet),0) clean_sheets,COALESCE(SUM(motm),0) motm,
@@ -808,10 +916,12 @@ async function getProfile(slug,request,env){
   return json({profile:p,stats:stats||{},posts:posts.results||[],recentMatches:recentMatches.results||[],achievements:achievements.results||[],clubHistory:clubHistory.results||[],inventory,badges:badges.results||[]});
 }
 async function getClub(slug,request,env){
-  const db=requireDb(env);
+  const db=requireDb(env),viewer=await currentUser(request,env);
   const c=await db.prepare(`SELECT c.*,u.username manager_username,d.name division_name,cd.bio,cd.discord,cd.website
     FROM clubs c LEFT JOIN users u ON u.id=c.manager_user_id LEFT JOIN divisions d ON d.id=c.division_id LEFT JOIN club_details cd ON cd.club_id=c.id WHERE c.slug=?`).bind(slug).first();
   if(!c)return fail('Club nicht gefunden.',404);
+  const likeCount=await db.prepare('SELECT COUNT(*) count FROM club_likes WHERE club_id=?').bind(c.id).first();
+  c.profile_likes=likeCount?.count||0;c.viewer_liked=viewer?!!(await db.prepare('SELECT 1 FROM club_likes WHERE user_id=? AND club_id=?').bind(viewer.id,c.id).first()):false;
   const [squad,posts,recentMatches,upcomingMatches,transfers,achievements,topPlayers]=await Promise.all([
     db.prepare(`SELECT u.id,u.username,cm.role,COALESCE(cm.shirt_number,po.shirt_number) shirt_number,p.position,p.overall,p.avatar_key,p.country,CASE WHEN p.last_seen_at>=datetime('now','-2 minutes') THEN 1 ELSE 0 END is_online
       FROM club_members cm JOIN users u ON u.id=cm.user_id LEFT JOIN profiles p ON p.user_id=u.id LEFT JOIN profile_onboarding po ON po.user_id=u.id

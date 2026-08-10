@@ -216,7 +216,7 @@ INSERT OR IGNORE INTO shop_items(id,sku,name,category,description,price_coins,as
 (103,'bundle_frame_vault','FRAME VAULT','BUNDLE','Vier unterschiedliche Profilrahmen für maximale Abwechslung.',2500,'/assets/user/bundles-box.png','LEGENDARY',1,1099);
 
 -- Bring the original four items in line with the real uploaded assets.
-UPDATE shop_items SET asset_key='/assets/user/Profilrahmen1.png',price_eur_cents=349 WHERE id=1;
+UPDATE shop_items SET asset_key='/assets/user/shop/Profibildrahmen1.png',price_eur_cents=349 WHERE id=1;
 UPDATE shop_items SET asset_key='/assets/user/Titelbildrahmen1.png',price_eur_cents=499 WHERE id=2;
 UPDATE shop_items SET asset_key='/assets/user/Namenseffekt1.png',price_eur_cents=399 WHERE id=3;
 UPDATE shop_items SET asset_key='/assets/user/EPLTrophy.png',price_eur_cents=499 WHERE id=4;
