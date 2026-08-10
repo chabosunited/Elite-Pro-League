@@ -1,9 +1,0 @@
-name = "epl-elite-pro-league"
-pages_build_output_dir = "./dist"
-compatibility_date = "2026-08-01"
-
-[vars]
-APP_NAME = "EPL - Elite Pro League"
-PUBLIC_SITE_URL = "http://localhost:8788"
-TURNSTILE_SITE_KEY = ""
-PAYMENTS_ENABLED = "false"
