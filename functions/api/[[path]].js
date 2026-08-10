@@ -28,6 +28,10 @@ export async function onRequest(context){
     if(route === 'auth/logout' && method === 'POST') return logout(request,env);
     if(route === 'auth/me' && method === 'GET') return me(request,env);
     if(route === 'presence' && method === 'POST') return heartbeat(request,env);
+    if(route === 'notifications' && method === 'GET') return listNotifications(request,env);
+    if(route === 'notifications/read' && method === 'POST') return readNotifications(request,env);
+    if(route === 'contracts/mine' && method === 'GET') return listMyContracts(request,env);
+    if(/^contracts\/\d+\/respond$/.test(route) && method === 'POST') return respondContract(route,request,env);
     if(route === 'social/state' && method === 'GET') return socialState(request,env);
     if(route === 'social/feed' && method === 'GET') return socialFeed(request,env);
     if(route === 'social/follow' && method === 'POST') return follow(request,env);
@@ -88,10 +92,13 @@ export async function onRequest(context){
     if(route === 'admin/club/coin-award' && method === 'POST') return adminClubCoinAward(request,env);
     if(route === 'admin/season/save' && method === 'POST') return adminSeasonSave(request,env);
     if(route === 'admin/division/save' && method === 'POST') return adminDivisionSave(request,env);
+    if(route === 'admin/division/delete' && method === 'POST') return adminDivisionDelete(request,env);
     if(route === 'admin/match/save' && method === 'POST') return adminMatchSave(request,env);
     if(route === 'admin/matches/generate' && method === 'POST') return adminGenerateMatches(request,env);
     if(route === 'admin/match/detail' && method === 'GET') return adminMatchDetail(request,env);
     if(route === 'admin/match/result' && method === 'POST') return adminMatchResult(request,env);
+    if(route === 'admin/match/reset-result' && method === 'POST') return adminResetMatchResult(request,env);
+    if(route === 'admin/schedule/reset' && method === 'POST') return adminResetSchedule(request,env);
     if(route === 'admin/news/save' && method === 'POST') return adminNewsSave(request,env);
     if(route === 'admin/transfer/save' && method === 'POST') return adminTransferSave(request,env);
     if(route === 'admin/content/delete' && method === 'POST') return adminContentDelete(request,env);
@@ -292,10 +299,69 @@ async function canClubPermission(db,user,clubId,permission){
   return Number(row?.allowed||0)===1;
 }
 
+async function notifyUser(db,userId,type,title,body='',href=''){
+  if(!userId)return;
+  await db.prepare(`INSERT INTO notifications(user_id,type,title,body,href) VALUES(?,?,?,?,?)`).bind(userId,cleanText(type,40)||'INFO',cleanText(title,120),cleanText(body,500),cleanText(href,250)).run();
+}
+function mentionedUsernames(text=''){
+  const found=new Set(),re=/(^|[^A-Za-z0-9_.-])@([A-Za-z0-9_.-]{3,24})/g;let m;
+  while((m=re.exec(String(text))))found.add(m[2].toLowerCase());
+  return [...found].slice(0,20);
+}
+async function notifyMentions(db,text,actorUserId,{actorLabel='',href='',type='MENTION'}={}){
+  const names=mentionedUsernames(text);if(!names.length)return;
+  for(const username of names){
+    const target=await db.prepare(`SELECT id,username FROM users WHERE lower(username)=? AND status='ACTIVE'`).bind(username).first();
+    if(!target||Number(target.id)===Number(actorUserId))continue;
+    await notifyUser(db,target.id,type,`${actorLabel||'Jemand'} hat dich erwähnt`,String(text).slice(0,220),href||`/spieler/${username}`);
+  }
+}
+async function addClubReputation(db,clubId,amount,eventType,referenceType,referenceId,description=''){
+  clubId=Number(clubId);amount=Math.trunc(Number(amount)||0);if(!clubId||!amount)return false;
+  const exists=await db.prepare(`SELECT 1 FROM club_reputation_events WHERE club_id=? AND event_type=? AND reference_type=? AND reference_id=?`).bind(clubId,eventType,referenceType,String(referenceId)).first();
+  if(exists)return false;
+  await db.batch([
+    db.prepare(`INSERT INTO club_reputation_events(club_id,amount,event_type,reference_type,reference_id,description) VALUES(?,?,?,?,?,?)`).bind(clubId,amount,eventType,referenceType,String(referenceId),cleanText(description,240)),
+    db.prepare(`UPDATE clubs SET reputation=MAX(0,reputation+?),updated_at=datetime('now') WHERE id=?`).bind(amount,clubId)
+  ]);return true;
+}
+async function listNotifications(request,env){
+  const db=requireDb(env),u=await requireUser(request,env),url=new URL(request.url),limit=Math.max(10,Math.min(100,Number(url.searchParams.get('limit')||60)));
+  const rows=await db.prepare(`SELECT id,type,title,body,href,read_at,created_at FROM notifications WHERE user_id=? ORDER BY created_at DESC,id DESC LIMIT ?`).bind(u.id,limit).all();
+  const unread=await db.prepare(`SELECT COUNT(*) count FROM notifications WHERE user_id=? AND read_at IS NULL`).bind(u.id).first();
+  return json({notifications:rows.results||[],unread:Number(unread?.count||0)});
+}
+async function readNotifications(request,env){
+  const db=requireDb(env),u=await requireUser(request,env),b=await request.json().catch(()=>({})),id=Number(b.id||0);
+  if(id)await db.prepare(`UPDATE notifications SET read_at=COALESCE(read_at,datetime('now')) WHERE id=? AND user_id=?`).bind(id,u.id).run();
+  else await db.prepare(`UPDATE notifications SET read_at=COALESCE(read_at,datetime('now')) WHERE user_id=?`).bind(u.id).run();
+  return json({ok:true});
+}
+
 async function heartbeat(request,env){
-  const db=requireDb(env),u=await requireUser(request,env);
+  const db=requireDb(env),u=await requireUser(request,env),now=Math.floor(Date.now()/1000);
   await db.prepare(`UPDATE profiles SET last_seen_at=datetime('now') WHERE user_id=?`).bind(u.id).run();
-  return json({ok:true,online:true});
+  let st=await db.prepare(`SELECT last_heartbeat_epoch,active_seconds,total_rewards FROM activity_reward_state WHERE user_id=?`).bind(u.id).first();
+  if(!st){await db.prepare(`INSERT INTO activity_reward_state(user_id,last_heartbeat_epoch,active_seconds,total_rewards) VALUES(?,?,0,0)`).bind(u.id,now).run();return json({ok:true,online:true,reward:0});}
+  const gap=Math.max(0,now-Number(st.last_heartbeat_epoch||now));let active=Number(st.active_seconds||0);
+  if(gap<=125)active+=Math.min(gap,90);else active=0;
+  let reward=0,balance=null;
+  if(active>=600){active-=600;reward=10;const ref=`${u.id}:${Math.floor(now/600)}`;
+    const exists=await db.prepare(`SELECT 1 FROM coin_transactions WHERE user_id=? AND type='PERFORMANCE' AND reference_type='ACTIVITY' AND reference_id=?`).bind(u.id,ref).first();
+    if(!exists){
+      await db.batch([
+        db.prepare(`INSERT OR IGNORE INTO coin_wallets(user_id,balance) VALUES(?,0)`).bind(u.id),
+        db.prepare(`UPDATE coin_wallets SET balance=balance+10,lifetime_earned=lifetime_earned+10,updated_at=datetime('now') WHERE user_id=?`).bind(u.id),
+        db.prepare(`INSERT INTO coin_transactions(user_id,amount,type,reference_type,reference_id,description) VALUES(?,10,'PERFORMANCE','ACTIVITY',?,'Online-Aktivität: 10 Minuten')`).bind(u.id,ref),
+        db.prepare(`UPDATE activity_reward_state SET total_rewards=total_rewards+1 WHERE user_id=?`).bind(u.id)
+      ]);
+      await notifyUser(db,u.id,'ACTIVITY_REWARD','+10 EPL Coins für Aktivität','Du hast 10 EPL Coins für 10 Minuten aktive Online-Zeit erhalten!','/shop');
+      const club=await db.prepare(`SELECT club_id FROM club_members WHERE user_id=? AND left_at IS NULL LIMIT 1`).bind(u.id).first();if(club)await addClubReputation(db,club.club_id,1,'ACTIVITY','USER_INTERVAL',ref,'Aktiver Spieler +1 Reputation');
+      balance=(await db.prepare(`SELECT balance FROM coin_wallets WHERE user_id=?`).bind(u.id).first())?.balance??null;
+    }else reward=0;
+  }
+  await db.prepare(`UPDATE activity_reward_state SET last_heartbeat_epoch=?,active_seconds=?,updated_at=datetime('now') WHERE user_id=?`).bind(now,active,u.id).run();
+  return json({ok:true,online:true,reward,balance,activeSeconds:active});
 }
 async function logout(request,env){
   const db=requireDb(env),sid=cookieMap(request).epl_session;
@@ -390,13 +456,13 @@ async function toggleTargetLike(request,env){
   if(type==='player'){
     const target=await db.prepare('SELECT id FROM users WHERE lower(username)=?').bind(slug).first();if(!target)return fail('Spieler nicht gefunden.',404);if(target.id===u.id)return fail('Du kannst dein eigenes Profil nicht liken.',409);
     const exists=await db.prepare('SELECT 1 FROM profile_likes WHERE user_id=? AND target_user_id=?').bind(u.id,target.id).first();
-    if(exists)await db.prepare('DELETE FROM profile_likes WHERE user_id=? AND target_user_id=?').bind(u.id,target.id).run();else await db.prepare('INSERT INTO profile_likes(user_id,target_user_id) VALUES(?,?)').bind(u.id,target.id).run();
+    if(exists)await db.prepare('DELETE FROM profile_likes WHERE user_id=? AND target_user_id=?').bind(u.id,target.id).run();else{await db.prepare('INSERT INTO profile_likes(user_id,target_user_id) VALUES(?,?)').bind(u.id,target.id).run();await notifyUser(db,target.id,'PROFILE_LIKE',`${u.username} gefällt dein Spielerprofil`,'Jemand aus der EPL Community hat dein Profil geliked.',`/spieler/${slug}`);}
     const c=await db.prepare('SELECT COUNT(*) count FROM profile_likes WHERE target_user_id=?').bind(target.id).first();return json({liked:!exists,count:c.count||0});
   }
   if(type==='club'){
-    const target=await db.prepare('SELECT id FROM clubs WHERE lower(slug)=?').bind(slug).first();if(!target)return fail('Club nicht gefunden.',404);
+    const target=await db.prepare('SELECT id,name,manager_user_id FROM clubs WHERE lower(slug)=?').bind(slug).first();if(!target)return fail('Club nicht gefunden.',404);
     const exists=await db.prepare('SELECT 1 FROM club_likes WHERE user_id=? AND club_id=?').bind(u.id,target.id).first();
-    if(exists)await db.prepare('DELETE FROM club_likes WHERE user_id=? AND club_id=?').bind(u.id,target.id).run();else await db.prepare('INSERT INTO club_likes(user_id,club_id) VALUES(?,?)').bind(u.id,target.id).run();
+    if(exists)await db.prepare('DELETE FROM club_likes WHERE user_id=? AND club_id=?').bind(u.id,target.id).run();else{await db.prepare('INSERT INTO club_likes(user_id,club_id) VALUES(?,?)').bind(u.id,target.id).run();if(target.manager_user_id&&Number(target.manager_user_id)!==Number(u.id))await notifyUser(db,target.manager_user_id,'CLUB_LIKE',`${u.username} gefällt ${target.name}`,'Dein Club hat einen neuen Like erhalten.',`/club/${slug}`);}
     const c=await db.prepare('SELECT COUNT(*) count FROM club_likes WHERE club_id=?').bind(target.id).first();return json({liked:!exists,count:c.count||0});
   }
   return fail('Ungültiger Like-Typ.');
@@ -439,7 +505,7 @@ async function getConversationMessages(route,request,env){
 async function sendConversationMessage(route,request,env){
   const db=requireDb(env),u=await requireUser(request,env),id=Number(route.split('/')[1]),b=await request.json(),body=cleanText(b.body,3000);
   if(!body)return fail('Nachricht ist leer.');const c=await db.prepare('SELECT id FROM conversations WHERE id=? AND (user_a=? OR user_b=?)').bind(id,u.id,u.id).first();if(!c)return fail('Unterhaltung nicht gefunden.',404);
-  const r=await db.prepare('INSERT INTO direct_messages(conversation_id,sender_user_id,body) VALUES(?,?,?)').bind(id,u.id,body).run();await db.prepare(`UPDATE conversations SET updated_at=datetime('now') WHERE id=?`).bind(id).run();return json({ok:true,id:r.meta.last_row_id});
+  const r=await db.prepare('INSERT INTO direct_messages(conversation_id,sender_user_id,body) VALUES(?,?,?)').bind(id,u.id,body).run();await db.prepare(`UPDATE conversations SET updated_at=datetime('now') WHERE id=?`).bind(id).run();const full=await db.prepare('SELECT user_a,user_b FROM conversations WHERE id=?').bind(id).first();const targetId=Number(full.user_a)===Number(u.id)?full.user_b:full.user_a;await notifyUser(db,targetId,'MESSAGE',`Neue Nachricht von ${u.username}`,body.slice(0,180),'/nachrichten');return json({ok:true,id:r.meta.last_row_id});
 }
 
 function newsSlugFromRoute(route){return decodeURIComponent(route.split('/')[1]||'');}
@@ -460,7 +526,7 @@ async function getNewsComments(route,request,env){
 }
 async function createNewsComment(route,request,env){
   const db=requireDb(env),u=await requireUser(request,env),slug=newsSlugFromRoute(route),b=await request.json(),body=cleanText(b.body,1500),parentId=b.parentId?Number(b.parentId):null;if(!body)return fail('Kommentar ist leer.');const n=await db.prepare(`SELECT id FROM news WHERE slug=? AND status='PUBLISHED'`).bind(slug).first();if(!n)return fail('News nicht gefunden.',404);
-  if(parentId){const parent=await db.prepare('SELECT id FROM news_comments WHERE id=? AND news_id=?').bind(parentId,n.id).first();if(!parent)return fail('Antwort-Kommentar nicht gefunden.',404);}const r=await db.prepare('INSERT INTO news_comments(news_id,user_id,body,parent_comment_id) VALUES(?,?,?,?)').bind(n.id,u.id,body,parentId).run();return json({ok:true,id:r.meta.last_row_id});
+  let parent=null;if(parentId){parent=await db.prepare('SELECT id,user_id FROM news_comments WHERE id=? AND news_id=?').bind(parentId,n.id).first();if(!parent)return fail('Antwort-Kommentar nicht gefunden.',404);}const r=await db.prepare('INSERT INTO news_comments(news_id,user_id,body,parent_comment_id) VALUES(?,?,?,?)').bind(n.id,u.id,body,parentId).run();const href=`/news/${encodeURIComponent(slug)}`;await notifyMentions(db,body,u.id,{actorLabel:u.username,href,type:'NEWS_MENTION'});if(parent?.user_id&&Number(parent.user_id)!==Number(u.id))await notifyUser(db,parent.user_id,'NEWS_REPLY',`${u.username} hat auf deinen News-Kommentar geantwortet`,body.slice(0,180),href);return json({ok:true,id:r.meta.last_row_id});
 }
 async function newsCommentLike(route,request,env){
   const db=requireDb(env),u=await requireUser(request,env),id=Number(route.split('/')[1]),c=await db.prepare('SELECT id FROM news_comments WHERE id=?').bind(id).first();if(!c)return fail('Kommentar nicht gefunden.',404);const x=await db.prepare('SELECT 1 FROM news_comment_likes WHERE comment_id=? AND user_id=?').bind(id,u.id).first();if(x)await db.prepare('DELETE FROM news_comment_likes WHERE comment_id=? AND user_id=?').bind(id,u.id).run();else await db.prepare('INSERT INTO news_comment_likes(comment_id,user_id) VALUES(?,?)').bind(id,u.id).run();const n=await db.prepare('SELECT COUNT(*) count FROM news_comment_likes WHERE comment_id=?').bind(id).first();return json({liked:!x,count:n.count||0});
@@ -472,13 +538,13 @@ async function follow(request,env){
     const target=await db.prepare('SELECT id FROM users WHERE username=? COLLATE NOCASE').bind(slug).first() || await db.prepare('SELECT id FROM users WHERE lower(username)=?').bind(slug.toLowerCase()).first();
     if(!target)return fail('Spieler nicht gefunden.',404);if(target.id===u.id)return fail('Du kannst dir nicht selbst folgen.');
     const existing=await db.prepare('SELECT 1 FROM follows WHERE follower_user_id=? AND followed_user_id=?').bind(u.id,target.id).first();
-    if(existing)await db.prepare('DELETE FROM follows WHERE follower_user_id=? AND followed_user_id=?').bind(u.id,target.id).run();else await db.prepare('INSERT INTO follows(follower_user_id,followed_user_id) VALUES(?,?)').bind(u.id,target.id).run();
+    if(existing)await db.prepare('DELETE FROM follows WHERE follower_user_id=? AND followed_user_id=?').bind(u.id,target.id).run();else{await db.prepare('INSERT INTO follows(follower_user_id,followed_user_id) VALUES(?,?)').bind(u.id,target.id).run();await notifyUser(db,target.id,'NEW_FOLLOWER',`${u.username} folgt dir jetzt`,'Du hast einen neuen Follower in der EPL Community.',`/spieler/${slug.toLowerCase()}`);}
     return json({following:!existing});
   }
   if(type==='club'){
-    const club=await db.prepare('SELECT id FROM clubs WHERE slug=?').bind(slug).first();if(!club)return fail('Club nicht gefunden.',404);
+    const club=await db.prepare('SELECT id,name,manager_user_id FROM clubs WHERE slug=?').bind(slug).first();if(!club)return fail('Club nicht gefunden.',404);
     const existing=await db.prepare('SELECT 1 FROM club_follows WHERE user_id=? AND club_id=?').bind(u.id,club.id).first();
-    if(existing){await db.batch([db.prepare('DELETE FROM club_follows WHERE user_id=? AND club_id=?').bind(u.id,club.id),db.prepare('UPDATE clubs SET followers_count=MAX(0,followers_count-1) WHERE id=?').bind(club.id)]);}else{await db.batch([db.prepare('INSERT INTO club_follows(user_id,club_id) VALUES(?,?)').bind(u.id,club.id),db.prepare('UPDATE clubs SET followers_count=followers_count+1 WHERE id=?').bind(club.id)]);}return json({following:!existing});
+    if(existing){await db.batch([db.prepare('DELETE FROM club_follows WHERE user_id=? AND club_id=?').bind(u.id,club.id),db.prepare('UPDATE clubs SET followers_count=MAX(0,followers_count-1) WHERE id=?').bind(club.id)]);}else{await db.batch([db.prepare('INSERT INTO club_follows(user_id,club_id) VALUES(?,?)').bind(u.id,club.id),db.prepare('UPDATE clubs SET followers_count=followers_count+1 WHERE id=?').bind(club.id)]);if(club.manager_user_id&&Number(club.manager_user_id)!==Number(u.id))await notifyUser(db,club.manager_user_id,'CLUB_FOLLOW',`${u.username} folgt ${club.name}`,'Dein Club hat einen neuen Follower erhalten.',`/club/${slug}`);}return json({following:!existing});
   }
   return fail('Ungültiger Follow-Typ.');
 }
@@ -488,7 +554,25 @@ async function createClub(request,env){
   return fail('Clubs können nur von EPL-Admins angelegt werden. Ein Admin weist dir einen Club als Vereinsmanager zu.',403);
 }
 async function createApplication(request,env){const db=requireDb(env),u=await requireUser(request,env),b=await request.json();const club=await db.prepare('SELECT id FROM clubs WHERE slug=?').bind(cleanText(b.clubSlug,60)).first();if(!club)return fail('Club nicht gefunden.',404);const existing=await db.prepare(`SELECT 1 FROM applications WHERE user_id=? AND club_id=? AND status='OPEN'`).bind(u.id,club.id).first();if(existing)return fail('Du hast bereits eine offene Bewerbung.',409);const r=await db.prepare('INSERT INTO applications(user_id,club_id,message) VALUES(?,?,?)').bind(u.id,club.id,cleanText(b.message,1000)).run();return json({id:r.meta.last_row_id,status:'OPEN'},201)}
-async function createContract(request,env){const db=requireDb(env),u=await requireUser(request,env),b=await request.json();const club=await db.prepare('SELECT id,manager_user_id FROM clubs WHERE slug=?').bind(cleanText(b.clubSlug,60)).first();if(!club)return fail('Club nicht gefunden.',404);if(!(await canClubPermission(db,u,club.id,'manage_page')))return fail('Du verwaltest diesen Club nicht.',403);const player=await db.prepare('SELECT id FROM users WHERE username=? COLLATE NOCASE').bind(cleanText(b.username,24)).first();if(!player)return fail('Spieler nicht gefunden.',404);const r=await db.prepare('INSERT INTO contracts(club_id,user_id,offered_by,starts_at,ends_at,message) VALUES(?,?,?,?,?,?)').bind(club.id,player.id,u.id,b.startsAt||null,b.endsAt||null,cleanText(b.message,800)).run();return json({id:r.meta.last_row_id,status:'OFFERED'},201)}
+async function createContract(request,env){
+  const db=requireDb(env),u=await requireUser(request,env),b=await request.json();const club=await db.prepare('SELECT id,manager_user_id,name,slug FROM clubs WHERE slug=?').bind(cleanText(b.clubSlug||u.managed_club_slug,60)).first();if(!club)return fail('Club nicht gefunden.',404);if(!(await canClubPermission(db,u,club.id,'manage_roster')))return fail('Du verwaltest diesen Club nicht.',403);
+  const player=await db.prepare(`SELECT u.id,u.username,p.free_agent,(SELECT club_id FROM club_members WHERE user_id=u.id AND left_at IS NULL LIMIT 1) active_club FROM users u LEFT JOIN profiles p ON p.user_id=u.id WHERE u.username=? COLLATE NOCASE AND u.status='ACTIVE'`).bind(cleanText(b.username,24)).first();if(!player)return fail('Spieler nicht gefunden.',404);if(player.active_club||!Number(player.free_agent))return fail('Vertragsangebote können nur an Free Agents gesendet werden.',409);
+  const pending=await db.prepare(`SELECT id FROM contracts WHERE club_id=? AND user_id=? AND status='OFFERED'`).bind(club.id,player.id).first();if(pending)return fail('Dieser Spieler hat bereits ein offenes Angebot von deinem Club.',409);
+  const r=await db.prepare('INSERT INTO contracts(club_id,user_id,offered_by,starts_at,ends_at,message) VALUES(?,?,?,?,?,?)').bind(club.id,player.id,u.id,b.startsAt||null,b.endsAt||null,cleanText(b.message,800)).run();await notifyUser(db,player.id,'CONTRACT_OFFER',`${club.name} bietet dir einen Vertrag an`,cleanText(b.message,300)||'Du hast ein neues Vertragsangebot erhalten.','/benachrichtigungen');return json({id:r.meta.last_row_id,status:'OFFERED'},201)
+}
+async function listMyContracts(request,env){const db=requireDb(env),u=await requireUser(request,env);const r=await db.prepare(`SELECT ct.id,ct.status,ct.message,ct.starts_at,ct.ends_at,ct.created_at,c.id club_id,c.name club_name,c.slug club_slug,c.logo_key,o.username offered_by_name FROM contracts ct JOIN clubs c ON c.id=ct.club_id LEFT JOIN users o ON o.id=ct.offered_by WHERE ct.user_id=? ORDER BY CASE ct.status WHEN 'OFFERED' THEN 0 ELSE 1 END,ct.created_at DESC LIMIT 50`).bind(u.id).all();return json({contracts:r.results||[]});}
+async function respondContract(route,request,env){
+  const db=requireDb(env),u=await requireUser(request,env),id=Number(route.split('/')[1]),b=await request.json(),action=String(b.action||'').toUpperCase();if(!['ACCEPT','REJECT'].includes(action))return fail('Ungültige Vertragsaktion.');const ct=await db.prepare(`SELECT ct.*,c.name club_name,c.slug club_slug,c.manager_user_id FROM contracts ct JOIN clubs c ON c.id=ct.club_id WHERE ct.id=? AND ct.user_id=?`).bind(id,u.id).first();if(!ct)return fail('Vertragsangebot nicht gefunden.',404);if(ct.status!=='OFFERED')return fail('Dieses Angebot wurde bereits beantwortet.',409);
+  if(action==='REJECT'){await db.prepare(`UPDATE contracts SET status='REJECTED',responded_at=datetime('now') WHERE id=?`).bind(id).run();await notifyUser(db,ct.offered_by,'CONTRACT_REJECTED',`${u.username} hat das Vertragsangebot abgelehnt`,ct.club_name,`/club/${ct.club_slug}`);return json({ok:true,status:'REJECTED'});}
+  const active=await db.prepare(`SELECT club_id FROM club_members WHERE user_id=? AND left_at IS NULL LIMIT 1`).bind(u.id).first();if(active)return fail('Du bist inzwischen bereits Mitglied eines Clubs.',409);
+  await db.batch([
+    db.prepare(`UPDATE contracts SET status='ACTIVE',starts_at=COALESCE(starts_at,date('now')),responded_at=datetime('now') WHERE id=?`).bind(id),
+    db.prepare(`INSERT INTO club_members(club_id,user_id,role,joined_at) VALUES(?,?,'PLAYER',datetime('now'))`).bind(ct.club_id,u.id),
+    db.prepare(`UPDATE profiles SET free_agent=0,updated_at=datetime('now') WHERE user_id=?`).bind(u.id),
+    db.prepare(`INSERT INTO transfers(user_id,from_club_id,to_club_id,contract_id,type,occurred_at) VALUES(?,NULL,?,?,'SIGNING',datetime('now'))`).bind(u.id,ct.club_id,id)
+  ]);
+  await notifyUser(db,ct.offered_by,'CONTRACT_ACCEPTED',`${u.username} hat den Vertrag angenommen`,`${u.username} ist jetzt Spieler von ${ct.club_name}.`,`/club/${ct.club_slug}`);await notifyUser(db,u.id,'CONTRACT_ACTIVE',`Willkommen bei ${ct.club_name}`,'Dein Vertrag wurde aktiviert und du bist jetzt Teil des Kaders.',`/club/${ct.club_slug}`);return json({ok:true,status:'ACTIVE',clubSlug:ct.club_slug});
+}
 
 async function purchaseItem(request,env){
   const db=requireDb(env),u=await requireUser(request,env),b=await request.json(),itemId=Number(b.itemId);
@@ -509,7 +593,7 @@ async function purchaseItem(request,env){
     const parts=await db.prepare('SELECT item_id FROM shop_bundle_items WHERE bundle_item_id=?').bind(itemId).all();
     for(const part of parts.results||[])stmts.push(db.prepare('INSERT OR IGNORE INTO user_inventory(user_id,item_id) VALUES(?,?)').bind(u.id,part.item_id));
   }
-  await db.batch(stmts);
+  await db.batch(stmts);const member=await db.prepare(`SELECT club_id FROM club_members WHERE user_id=? AND left_at IS NULL LIMIT 1`).bind(u.id).first();if(member)await addClubReputation(db,member.club_id,5,'SHOP_PURCHASE','ITEM',`${u.id}:${itemId}`,'Shop-Kauf eines Clubmitglieds +5 Reputation');
   return json({ok:true,balance:wallet.balance-item.price_coins});
 }
 async function getWallet(request,env){const db=requireDb(env),u=await requireUser(request,env);const wallet=await db.prepare('SELECT * FROM coin_wallets WHERE user_id=?').bind(u.id).first();const tx=await db.prepare('SELECT amount,type,description,created_at FROM coin_transactions WHERE user_id=? ORDER BY created_at DESC LIMIT 30').bind(u.id).all();const gifts=await db.prepare(`SELECT cg.amount,cg.created_at,cg.sender_user_id,cg.recipient_user_id,su.username sender_name,ru.username recipient_name,sc.name sender_club,rc.name recipient_club FROM coin_gifts cg LEFT JOIN users su ON su.id=cg.sender_user_id LEFT JOIN users ru ON ru.id=cg.recipient_user_id LEFT JOIN clubs sc ON sc.id=cg.sender_club_id LEFT JOIN clubs rc ON rc.id=cg.recipient_club_id WHERE cg.sender_user_id=? OR cg.recipient_user_id=? ORDER BY cg.created_at DESC LIMIT 30`).bind(u.id,u.id).all();return json({wallet,transactions:tx.results||[],gifts:gifts.results||[]})}
@@ -563,7 +647,7 @@ async function stripeWebhook(request,env){
       const parts=await db.prepare('SELECT item_id FROM shop_bundle_items WHERE bundle_item_id=?').bind(order.item_id).all();
       for(const part of parts.results||[])stmts.push(db.prepare('INSERT OR IGNORE INTO user_inventory(user_id,item_id) VALUES(?,?)').bind(order.user_id,part.item_id));
     }
-    await db.batch(stmts);return json({received:true});
+    await db.batch(stmts);const member=await db.prepare(`SELECT club_id FROM club_members WHERE user_id=? AND left_at IS NULL LIMIT 1`).bind(order.user_id).first();if(member)await addClubReputation(db,member.club_id,5,'SHOP_PURCHASE','PAID_ITEM',orderId,'Echtgeld-Shop-Kauf eines Clubmitglieds +5 Reputation');return json({received:true});
   }
   const order=await db.prepare('SELECT * FROM coin_orders WHERE id=?').bind(orderId).first();if(!order)return fail('Order nicht gefunden.',404);if(order.status==='PAID')return json({received:true,duplicate:true});
   await db.batch([
@@ -659,6 +743,7 @@ async function createComment(route,request,env){
   let actorClubId=null;
   if(asClubSlug){const club=await db.prepare('SELECT id FROM clubs WHERE slug=?').bind(asClubSlug).first();if(!club)return fail('Club nicht gefunden.',404);if(!(await canClubPermission(db,u,club.id,'manage_page')))return fail('Du darfst nicht als dieser Club kommentieren.',403);actorClubId=club.id;}
   const r=await db.prepare('INSERT INTO comments(post_id,user_id,body,parent_comment_id,actor_club_id) VALUES(?,?,?,?,?)').bind(postId,u.id,body,parentId,actorClubId).run();
+  const postInfo=await db.prepare(`SELECT p.author_user_id,p.club_id,au.username author_username,c.slug club_slug,c.manager_user_id FROM posts p LEFT JOIN users au ON au.id=p.author_user_id LEFT JOIN clubs c ON c.id=p.club_id WHERE p.id=?`).bind(postId).first();const actorClub=actorClubId?await db.prepare('SELECT name FROM clubs WHERE id=?').bind(actorClubId).first():null,actorLabel=actorClub?.name||u.username,href=postInfo?.club_slug?`/club/${postInfo.club_slug}`:`/spieler/${String(postInfo?.author_username||'').toLowerCase()}`;await notifyMentions(db,body,u.id,{actorLabel,href,type:'COMMENT_MENTION'});let ownerId=postInfo?.author_user_id||postInfo?.manager_user_id;if(ownerId&&Number(ownerId)!==Number(u.id))await notifyUser(db,ownerId,'POST_COMMENT',`${actorLabel} hat deinen Beitrag kommentiert`,body.slice(0,180),href);if(parentId){const parent=await db.prepare('SELECT user_id FROM comments WHERE id=?').bind(parentId).first();if(parent?.user_id&&Number(parent.user_id)!==Number(u.id))await notifyUser(db,parent.user_id,'COMMENT_REPLY',`${actorLabel} hat dir geantwortet`,body.slice(0,180),href);}
   return json({ok:true,id:r.meta.last_row_id},201);
 }
 async function commentLike(route,request,env){
@@ -671,7 +756,7 @@ async function commentLike(route,request,env){
   return json({liked:!existing,likes:Number(count?.count||0)});
 }
 
-async function createPost(request,env){const db=requireDb(env),u=await requireUser(request,env),b=await request.json(),body=cleanText(b.body,2000);if(!body)return fail('Beitrag ist leer.');let clubId=null;if(b.clubSlug){const c=await db.prepare('SELECT id,manager_user_id FROM clubs WHERE slug=?').bind(cleanText(b.clubSlug,60)).first();if(!c)return fail('Club nicht gefunden.',404);if(!(await canClubPermission(db,u,c.id,'manage_page')))return fail('Du darfst für diesen Club nicht posten.',403);clubId=c.id;}const r=await db.prepare('INSERT INTO posts(author_user_id,club_id,body,media_key,match_id) VALUES(?,?,?,?,?)').bind(clubId?null:u.id,clubId,body,cleanText(b.mediaKey,250)||null,b.matchId||null).run();return json({id:r.meta.last_row_id},201)}
+async function createPost(request,env){const db=requireDb(env),u=await requireUser(request,env),b=await request.json(),body=cleanText(b.body,2000);if(!body)return fail('Beitrag ist leer.');let clubId=null,actorLabel=u.username,href=`/spieler/${u.username.toLowerCase()}`;if(b.clubSlug){const c=await db.prepare('SELECT id,manager_user_id,name,slug FROM clubs WHERE slug=?').bind(cleanText(b.clubSlug,60)).first();if(!c)return fail('Club nicht gefunden.',404);if(!(await canClubPermission(db,u,c.id,'manage_page')))return fail('Du darfst für diesen Club nicht posten.',403);clubId=c.id;actorLabel=c.name;href=`/club/${c.slug}`;}const r=await db.prepare('INSERT INTO posts(author_user_id,club_id,body,media_key,match_id) VALUES(?,?,?,?,?)').bind(clubId?null:u.id,clubId,body,cleanText(b.mediaKey,250)||null,b.matchId||null).run();await notifyMentions(db,body,u.id,{actorLabel,href,type:'POST_MENTION'});return json({id:r.meta.last_row_id},201)}
 async function adminCoinAward(request,env){const db=requireDb(env),u=await requireAdminPermission(request,env,'coins'),b=await request.json(),amount=Math.trunc(Number(b.amount));if(!Number.isFinite(amount)||amount===0||Math.abs(amount)>10000)return fail('Ungültiger Coin-Betrag.');const target=await db.prepare('SELECT id,username FROM users WHERE username=? COLLATE NOCASE').bind(cleanText(b.username,24)).first();if(!target)return fail('Spieler nicht gefunden.',404);if(amount<0){const w=await db.prepare('SELECT balance FROM coin_wallets WHERE user_id=?').bind(target.id).first();if(!w||w.balance+amount<0)return fail('Wallet würde negativ werden.',409);}const ref=crypto.randomUUID();await db.batch([db.prepare('UPDATE coin_wallets SET balance=balance+?,lifetime_earned=lifetime_earned+CASE WHEN ?>0 THEN ? ELSE 0 END,lifetime_spent=lifetime_spent+CASE WHEN ?<0 THEN -? ELSE 0 END,updated_at=datetime(\'now\') WHERE user_id=?').bind(amount,amount,amount,amount,amount,target.id),db.prepare(`INSERT INTO coin_transactions(user_id,amount,type,reference_type,reference_id,description) VALUES(?,?,'ADMIN_ADJUSTMENT','ADMIN',?,?)`).bind(target.id,amount,ref,cleanText(b.description,200)||`Admin-Anpassung durch ${u.username}`)]);const w2=await db.prepare('SELECT balance FROM coin_wallets WHERE user_id=?').bind(target.id).first();return json({ok:true,balance:w2.balance})}
 async function submitMatch(route,request,env){
   const db=requireDb(env),u=await requireUser(request,env),id=Number(route.split('/')[1]),b=await request.json();
@@ -856,6 +941,23 @@ async function adminDivisionSave(request,env){
   const db=requireDb(env);await requireAdminPermission(request,env,'leagues');const b=await request.json(),id=asId(b.id),seasonId=asId(b.seasonId),name=cleanText(b.name,80),level=Math.max(1,Math.trunc(Number(b.level)||1)),maxClubs=Math.max(2,Math.min(64,Math.trunc(Number(b.maxClubs)||16)));if(!seasonId||!name)return fail('Saison und Ligename fehlen.');
   if(id)await db.prepare('UPDATE divisions SET season_id=?,name=?,level=?,max_clubs=? WHERE id=?').bind(seasonId,name,level,maxClubs,id).run();else await db.prepare('INSERT INTO divisions(season_id,name,level,max_clubs) VALUES(?,?,?,?)').bind(seasonId,name,level,maxClubs).run();return json({ok:true});
 }
+async function adminDivisionDelete(request,env){
+  const db=requireDb(env);await requireAdminPermission(request,env,'leagues');const b=await request.json(),id=asId(b.id);if(!id)return fail('Liga fehlt.');const d=await db.prepare(`SELECT d.id,d.name,(SELECT COUNT(*) FROM matches WHERE division_id=d.id) matches_count FROM divisions d WHERE d.id=?`).bind(id).first();if(!d)return fail('Liga nicht gefunden.',404);
+  const matches=await db.prepare(`SELECT id FROM matches WHERE division_id=?`).bind(id).all();for(const m of matches.results||[])await reverseMatchAwards(db,m.id);
+  await db.batch([db.prepare(`UPDATE clubs SET division_id=NULL,updated_at=datetime('now') WHERE division_id=?`).bind(id),db.prepare(`DELETE FROM divisions WHERE id=?`).bind(id)]);return json({ok:true,name:d.name,deletedMatches:Number(d.matches_count||0)});
+}
+async function reverseMatchAwards(db,matchId){
+  const tx=await db.prepare(`SELECT id,user_id,amount FROM coin_transactions WHERE type='PERFORMANCE' AND reference_type='MATCH' AND reference_id=?`).bind(String(matchId)).all();for(const x of tx.results||[]){await db.prepare(`UPDATE coin_wallets SET balance=MAX(0,balance-?),lifetime_earned=MAX(0,lifetime_earned-?),updated_at=datetime('now') WHERE user_id=?`).bind(Math.max(0,Number(x.amount||0)),Math.max(0,Number(x.amount||0)),x.user_id).run();await db.prepare('DELETE FROM coin_transactions WHERE id=?').bind(x.id).run();}
+  const ctx=await db.prepare(`SELECT id,club_id,amount FROM club_coin_transactions WHERE type='PERFORMANCE' AND reference_type='MATCH' AND reference_id=?`).bind(String(matchId)).all();for(const x of ctx.results||[]){await db.prepare(`UPDATE club_coin_wallets SET balance=MAX(0,balance-?),lifetime_earned=MAX(0,lifetime_earned-?),updated_at=datetime('now') WHERE club_id=?`).bind(Math.max(0,Number(x.amount||0)),Math.max(0,Number(x.amount||0)),x.club_id).run();await db.prepare('DELETE FROM club_coin_transactions WHERE id=?').bind(x.id).run();}
+  const reps=await db.prepare(`SELECT id,club_id,amount FROM club_reputation_events WHERE reference_type='MATCH' AND reference_id=?`).bind(String(matchId)).all();for(const x of reps.results||[]){await db.prepare(`UPDATE clubs SET reputation=MAX(0,reputation-?) WHERE id=?`).bind(Math.max(0,Number(x.amount||0)),x.club_id).run();await db.prepare('DELETE FROM club_reputation_events WHERE id=?').bind(x.id).run();}
+}
+async function adminResetMatchResult(request,env){
+  const db=requireDb(env);await requireAdminPermission(request,env,'matches');const b=await request.json(),id=asId(b.matchId);if(!id)return fail('Match fehlt.');const m=await db.prepare('SELECT id FROM matches WHERE id=?').bind(id).first();if(!m)return fail('Match nicht gefunden.',404);await reverseMatchAwards(db,id);await db.batch([db.prepare('DELETE FROM player_stats WHERE match_id=?').bind(id),db.prepare('DELETE FROM match_club_submissions WHERE match_id=?').bind(id),db.prepare(`UPDATE matches SET home_score=NULL,away_score=NULL,status='SCHEDULED',submitted_by=NULL,confirmed_by=NULL,notes=NULL,updated_at=datetime('now') WHERE id=?`).bind(id)]);return json({ok:true});
+}
+async function adminResetSchedule(request,env){
+  const db=requireDb(env);await requireAdminPermission(request,env,'matches');const b=await request.json(),seasonId=asId(b.seasonId),divisionId=asId(b.divisionId);if(!seasonId||!divisionId)return fail('Saison und Liga sind erforderlich.');const rows=await db.prepare(`SELECT id FROM matches WHERE season_id=? AND division_id=?`).bind(seasonId,divisionId).all();for(const m of rows.results||[])await reverseMatchAwards(db,m.id);await db.prepare(`DELETE FROM matches WHERE season_id=? AND division_id=?`).bind(seasonId,divisionId).run();return json({ok:true,deleted:(rows.results||[]).length});
+}
+
 async function adminMatchSave(request,env){
   const db=requireDb(env);await requireAdminPermission(request,env,'matches');
   const b=await request.json(),id=asId(b.id),seasonId=asId(b.seasonId),divisionId=asId(b.divisionId),home=asId(b.homeClubId),away=asId(b.awayClubId),matchday=Math.max(1,Math.trunc(Number(b.matchday)||1)),scheduled=cleanText(b.scheduledAt,40);
@@ -1090,6 +1192,7 @@ async function awardMatchCoins(db,m){
       db.prepare(`UPDATE club_coin_wallets SET balance=balance+?,lifetime_earned=lifetime_earned+?,updated_at=datetime('now') WHERE club_id=?`).bind(amount,amount,clubId),
       db.prepare(`INSERT INTO club_coin_transactions(club_id,amount,type,reference_type,reference_id,description) VALUES(?,?,'PERFORMANCE','MATCH',?,?)`).bind(clubId,amount,String(m.id),parts.join(' • '))
     ]);
+    await addClubReputation(db,clubId,winner===clubId?15:10,'MATCH','MATCH',String(m.id),winner===clubId?'Match gespielt + Sieg':'Match gespielt');
   }
 }
 async function eaClubInfo(request,env){const u=new URL(request.url),clubId=(u.searchParams.get('clubId')||'').trim(),platform=(u.searchParams.get('platform')||'common-gen5').trim();if(!/^\d{1,12}$/.test(clubId))return fail('Ungültige EA Club ID.');if(!['common-gen5','common-gen4'].includes(platform))return fail('Ungültige Plattform.');const target=`https://proclubs.ea.com/api/fc/clubs/info?platform=${encodeURIComponent(platform)}&clubIds=${encodeURIComponent(clubId)}`;const res=await fetch(target,{headers:{accept:'application/json','user-agent':'EPL-Elite-Pro-League/1.0'},signal:AbortSignal.timeout(9000)});if(!res.ok)return fail(`EA Clubs antwortet mit HTTP ${res.status}.`,502);const data=await res.json();return json({provider:'EA Clubs',clubId,platform,data});}
@@ -1198,7 +1301,7 @@ async function listPlayers(env){
 }
 async function listClubs(env){
   const db=requireDb(env);
-  const r=await db.prepare(`SELECT c.id,c.name,c.slug,c.logo_key,c.cover_key,c.reputation,c.followers_count,c.verified,d.name division,u.username manager,COALESCE((SELECT COUNT(*) FROM club_members cm WHERE cm.club_id=c.id AND cm.left_at IS NULL),0) squad_size,COALESCE((SELECT COUNT(*) FROM matches m WHERE (m.home_club_id=c.id OR m.away_club_id=c.id) AND m.status='CONFIRMED'),0) played,COALESCE((SELECT COUNT(*)*3 FROM matches m WHERE ((m.home_club_id=c.id AND m.home_score>m.away_score) OR (m.away_club_id=c.id AND m.away_score>m.home_score)) AND m.status='CONFIRMED'),0)+COALESCE((SELECT COUNT(*) FROM matches m WHERE (m.home_club_id=c.id OR m.away_club_id=c.id) AND m.home_score=m.away_score AND m.status='CONFIRMED'),0) points FROM clubs c LEFT JOIN divisions d ON d.id=c.division_id LEFT JOIN users u ON u.id=c.manager_user_id ORDER BY c.created_at DESC`).all();
+  const r=await db.prepare(`SELECT c.id,c.name,c.slug,c.logo_key,c.cover_key,c.reputation,c.followers_count,c.verified,c.division_id,d.name division,d.level division_level,u.username manager,COALESCE((SELECT COUNT(*) FROM club_members cm WHERE cm.club_id=c.id AND cm.left_at IS NULL),0) squad_size,COALESCE((SELECT COUNT(*) FROM matches m WHERE (m.home_club_id=c.id OR m.away_club_id=c.id) AND m.status='CONFIRMED'),0) played,COALESCE((SELECT COUNT(*)*3 FROM matches m WHERE ((m.home_club_id=c.id AND m.home_score>m.away_score) OR (m.away_club_id=c.id AND m.away_score>m.home_score)) AND m.status='CONFIRMED'),0)+COALESCE((SELECT COUNT(*) FROM matches m WHERE (m.home_club_id=c.id OR m.away_club_id=c.id) AND m.home_score=m.away_score AND m.status='CONFIRMED'),0) points FROM clubs c LEFT JOIN divisions d ON d.id=c.division_id LEFT JOIN users u ON u.id=c.manager_user_id ORDER BY c.created_at DESC`).all();
   return json({clubs:r.results});
 }
 async function listNews(env){
@@ -1432,12 +1535,12 @@ async function adminFinalizeSeason(request,env){
   const pgoals=await db.prepare(`SELECT usg.user_id,usg.goal_id,sgt.metric,sgt.target_value,CASE WHEN usg.payout_coins>0 THEN usg.payout_coins ELSE sgt.reward_coins END reward_coins,sgt.title FROM user_season_goals usg JOIN season_goal_templates sgt ON sgt.id=usg.goal_id WHERE usg.season_id=? AND usg.status='SELECTED'`).bind(seasonId).all();let playerAwards=0,clubAwards=0;
   for(const g of pgoals.results||[]){
     const progress=await playerGoalMetric(db,g.user_id,seasonId,g.metric),ok=progress>=Number(g.target_value);await db.prepare(`UPDATE user_season_goals SET status=?,progress_value=?,completed_at=CASE WHEN ?='COMPLETED' THEN datetime('now') ELSE NULL END WHERE season_id=? AND user_id=? AND goal_id=?`).bind(ok?'COMPLETED':'FAILED',progress,ok?'COMPLETED':'FAILED',seasonId,g.user_id,g.goal_id).run();
-    if(ok){const ref=`${seasonId}:${g.goal_id}`;const exists=await db.prepare(`SELECT 1 FROM coin_transactions WHERE user_id=? AND type='PERFORMANCE' AND reference_type='SEASON_GOAL' AND reference_id=?`).bind(g.user_id,ref).first();if(!exists){await db.batch([db.prepare(`UPDATE coin_wallets SET balance=balance+?,lifetime_earned=lifetime_earned+?,updated_at=datetime('now') WHERE user_id=?`).bind(g.reward_coins,g.reward_coins,g.user_id),db.prepare(`INSERT INTO coin_transactions(user_id,amount,type,reference_type,reference_id,description) VALUES(?,?,'PERFORMANCE','SEASON_GOAL',?,?)`).bind(g.user_id,g.reward_coins,ref,`Saisonziel erfolgreich: ${g.title}`)]);playerAwards++;}}
+    if(ok){const ref=`${seasonId}:${g.goal_id}`;const exists=await db.prepare(`SELECT 1 FROM coin_transactions WHERE user_id=? AND type='PERFORMANCE' AND reference_type='SEASON_GOAL' AND reference_id=?`).bind(g.user_id,ref).first();if(!exists){await db.batch([db.prepare(`UPDATE coin_wallets SET balance=balance+?,lifetime_earned=lifetime_earned+?,updated_at=datetime('now') WHERE user_id=?`).bind(g.reward_coins,g.reward_coins,g.user_id),db.prepare(`INSERT INTO coin_transactions(user_id,amount,type,reference_type,reference_id,description) VALUES(?,?,'PERFORMANCE','SEASON_GOAL',?,?)`).bind(g.user_id,g.reward_coins,ref,`Saisonziel erfolgreich: ${g.title}`)]);await notifyUser(db,g.user_id,'SEASON_GOAL',`Saisonziel geschafft: ${g.title}`,`+${g.reward_coins} EPL Coins wurden ausgezahlt.`,'/spieler');const club=await db.prepare(`SELECT club_id FROM club_members WHERE user_id=? AND left_at IS NULL LIMIT 1`).bind(g.user_id).first();if(club)await addClubReputation(db,club.club_id,25,'PLAYER_SEASON_GOAL','GOAL',ref,`Spieler-Saisonziel geschafft: ${g.title}`);playerAwards++;}}
   }
   const cgoals=await db.prepare(`SELECT csg.club_id,csg.goal_id,sgt.metric,sgt.target_value,CASE WHEN csg.payout_coins>0 THEN csg.payout_coins ELSE sgt.reward_coins END reward_coins,sgt.title FROM club_season_goals csg JOIN season_goal_templates sgt ON sgt.id=csg.goal_id WHERE csg.season_id=? AND csg.status='SELECTED'`).bind(seasonId).all();
   for(const g of cgoals.results||[]){
     const progress=await clubGoalMetric(db,g.club_id,seasonId,g.metric),ok=progress>=Number(g.target_value);await db.prepare(`UPDATE club_season_goals SET status=?,progress_value=?,completed_at=CASE WHEN ?='COMPLETED' THEN datetime('now') ELSE NULL END WHERE season_id=? AND club_id=? AND goal_id=?`).bind(ok?'COMPLETED':'FAILED',progress,ok?'COMPLETED':'FAILED',seasonId,g.club_id,g.goal_id).run();
-    if(ok){const ref=`${seasonId}:${g.club_id}:${g.goal_id}`,exists=await db.prepare(`SELECT 1 FROM club_coin_transactions WHERE club_id=? AND type='SEASON_GOAL' AND reference_type='SEASON_GOAL_PAYOUT' AND reference_id=?`).bind(g.club_id,ref).first();if(!exists){await db.batch([db.prepare(`INSERT OR IGNORE INTO club_coin_wallets(club_id,balance) VALUES(?,0)`).bind(g.club_id),db.prepare(`UPDATE club_coin_wallets SET balance=balance+?,lifetime_earned=lifetime_earned+?,updated_at=datetime('now') WHERE club_id=?`).bind(g.reward_coins,g.reward_coins,g.club_id),db.prepare(`INSERT INTO club_coin_transactions(club_id,amount,type,reference_type,reference_id,description) VALUES(?,?,'SEASON_GOAL','SEASON_GOAL_PAYOUT',?,?)`).bind(g.club_id,g.reward_coins,ref,`Club-Saisonziel erfolgreich: ${g.title}`)]);clubAwards++;}}
+    if(ok){const ref=`${seasonId}:${g.club_id}:${g.goal_id}`,exists=await db.prepare(`SELECT 1 FROM club_coin_transactions WHERE club_id=? AND type='SEASON_GOAL' AND reference_type='SEASON_GOAL_PAYOUT' AND reference_id=?`).bind(g.club_id,ref).first();if(!exists){await db.batch([db.prepare(`INSERT OR IGNORE INTO club_coin_wallets(club_id,balance) VALUES(?,0)`).bind(g.club_id),db.prepare(`UPDATE club_coin_wallets SET balance=balance+?,lifetime_earned=lifetime_earned+?,updated_at=datetime('now') WHERE club_id=?`).bind(g.reward_coins,g.reward_coins,g.club_id),db.prepare(`INSERT INTO club_coin_transactions(club_id,amount,type,reference_type,reference_id,description) VALUES(?,?,'SEASON_GOAL','SEASON_GOAL_PAYOUT',?,?)`).bind(g.club_id,g.reward_coins,ref,`Club-Saisonziel erfolgreich: ${g.title}`)]);await addClubReputation(db,g.club_id,100,'CLUB_SEASON_GOAL','GOAL',ref,`Club-Saisonziel geschafft: ${g.title}`);const mgr=await db.prepare('SELECT manager_user_id FROM clubs WHERE id=?').bind(g.club_id).first();if(mgr?.manager_user_id)await notifyUser(db,mgr.manager_user_id,'CLUB_SEASON_GOAL',`Clubziel geschafft: ${g.title}`,`+${g.reward_coins} EPL Coins für die Clubkasse.`,'/manager');clubAwards++;}}
   }
   if(b.finishSeason!==false)await db.prepare(`UPDATE seasons SET status='FINISHED' WHERE id=?`).bind(seasonId).run();return json({ok:true,playerAwards,clubAwards});
 }
