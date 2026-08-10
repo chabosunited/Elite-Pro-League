@@ -1,0 +1,10 @@
+{
+  "name": "epl-elite-pro-league",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "node build.mjs && node dev-server.mjs",
+    "build": "node build.mjs"
+  }
+}
