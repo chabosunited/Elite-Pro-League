@@ -576,3 +576,22 @@
   .profile-actions .btn,.profile-actions a.btn{width:100%!important;min-width:0!important;display:flex!important;align-items:center!important;justify-content:center!important;text-align:center!important;white-space:normal!important;line-height:1.15!important}
 }
 @media(max-width:370px){.profile-actions{grid-template-columns:repeat(2,minmax(0,1fr))!important}}
+
+/* =========================================================
+   EPL v12 — Full-Admin Awards + compact mobile stat rail
+   ========================================================= */
+.award-stack-card{position:relative}.award-art-wrap{position:relative;display:block;width:max-content;margin:0 auto}.award-art-wrap .achievement-mini-art{margin-bottom:7px}.award-count{position:absolute;right:-7px;top:-5px;min-width:28px;height:22px;padding:0 6px;display:grid;place-items:center;border-radius:999px;background:linear-gradient(180deg,#0d9cff,#005be8);border:2px solid #07111e;color:#fff;font-family:Rajdhani,Inter,sans-serif;font-size:13px;box-shadow:0 0 14px rgba(0,135,255,.5)}
+.award-admin-layout{align-items:start}.award-holdings{display:grid;gap:8px;margin-top:12px}.admin-owned-award{display:grid;grid-template-columns:54px minmax(0,1fr) auto auto;gap:10px;align-items:center;padding:9px;border:1px solid #1d334b;border-radius:9px;background:#06111d}.admin-owned-award img{width:52px;height:52px;object-fit:contain}.admin-owned-award span b,.admin-owned-award span small{display:block}.admin-owned-award span b{font-size:11px}.admin-owned-award span small{font-size:8px;color:#8f9dad;margin-top:2px}.admin-owned-award>strong{font-family:Rajdhani,Inter,sans-serif;font-size:20px;color:#42bcff}.admin-owned-award.totw-owned{border-color:#725f25;background:linear-gradient(135deg,rgba(104,78,9,.12),#06111d)}.admin-owned-award.totw-owned>strong{color:#ffd76b}.award-admin-log{display:grid;gap:0;max-height:570px;overflow:auto}.award-log-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:5px 10px;padding:9px 0;border-bottom:1px solid #182b40}.award-log-row span b,.award-log-row span small{display:block}.award-log-row span b{font-size:10px}.award-log-row span small{font-size:8px;color:#8e9cac}.award-log-row>strong{font-family:Rajdhani;font-size:17px}.award-log-row>em{grid-column:1/-1;font-size:8px;color:#718094;font-style:normal}.admin-award-form .field[hidden]{display:none!important}
+
+@media(max-width:760px){
+  /* Compact horizontal social-stat rail: swipe left/right instead of a huge 2-row block. */
+  .ref-profile-statbar{display:flex!important;grid-template-columns:none!important;overflow-x:auto!important;overflow-y:hidden!important;scroll-snap-type:x proximity!important;scrollbar-width:none!important;-webkit-overflow-scrolling:touch!important;height:60px!important;min-height:60px!important;padding:0!important;margin:0!important;border-left:0!important;border-right:0!important;border-radius:0!important;background:#050e19!important;gap:0!important}
+  .ref-profile-statbar::-webkit-scrollbar{display:none!important}
+  .ref-profile-statbar .ref-rank{display:none!important}
+  .ref-profile-statbar>div{flex:0 0 82px!important;min-width:82px!important;width:82px!important;height:60px!important;padding:8px 4px!important;border-right:1px solid #172b41!important;border-bottom:0!important;display:flex!important;flex-direction:column!important;align-items:center!important;justify-content:center!important;scroll-snap-align:start!important}
+  .ref-profile-statbar>div:nth-child(4n){border-right:1px solid #172b41!important}
+  .ref-profile-statbar>div:last-child{border-right:0!important}
+  .ref-profile-statbar strong{font-size:17px!important;line-height:1!important}
+  .ref-profile-statbar span{font-size:6.8px!important;margin-top:4px!important;white-space:nowrap!important}
+  .award-admin-layout{grid-template-columns:1fr!important}.admin-owned-award{grid-template-columns:46px minmax(0,1fr) auto!important}.admin-owned-award img{width:44px;height:44px}.admin-owned-award .btn{grid-column:2/-1;width:100%}
+}

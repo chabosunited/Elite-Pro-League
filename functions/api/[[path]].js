@@ -83,6 +83,9 @@ export async function onRequest(context){
     if(route === 'posts' && method === 'POST') return createPost(request,env);
     if(route === 'reports' && method === 'POST') return createReport(request,env);
     if(route === 'admin/coin-award' && method === 'POST') return adminCoinAward(request,env);
+    if(route === 'admin/awards' && method === 'GET') return adminAwardsOverview(request,env);
+    if(route === 'admin/awards/grant' && method === 'POST') return adminAwardGrant(request,env);
+    if(route === 'admin/awards/revoke' && method === 'POST') return adminAwardRevoke(request,env);
     if(route === 'admin/overview' && method === 'GET') return adminOverview(request,env);
     if(route === 'admin/totw' && method === 'GET') return adminTotwOverview(request,env);
     if(route === 'admin/totw/candidates' && method === 'GET') return adminTotwCandidates(request,env);
@@ -779,6 +782,63 @@ async function createPost(request,env){
   await notifyMentions(db,body,u.id,{actorLabel,href,type:'POST_MENTION'});return json({id:r.meta.last_row_id},201)
 }
 async function adminCoinAward(request,env){const db=requireDb(env),u=await requireAdminPermission(request,env,'coins'),b=await request.json(),amount=Math.trunc(Number(b.amount));if(!Number.isFinite(amount)||amount===0||Math.abs(amount)>10000)return fail('Ungültiger Coin-Betrag.');const target=await db.prepare('SELECT id,username FROM users WHERE username=? COLLATE NOCASE').bind(cleanText(b.username,24)).first();if(!target)return fail('Spieler nicht gefunden.',404);if(amount<0){const w=await db.prepare('SELECT balance FROM coin_wallets WHERE user_id=?').bind(target.id).first();if(!w||w.balance+amount<0)return fail('Wallet würde negativ werden.',409);}const ref=crypto.randomUUID();await db.batch([db.prepare('UPDATE coin_wallets SET balance=balance+?,lifetime_earned=lifetime_earned+CASE WHEN ?>0 THEN ? ELSE 0 END,lifetime_spent=lifetime_spent+CASE WHEN ?<0 THEN -? ELSE 0 END,updated_at=datetime(\'now\') WHERE user_id=?').bind(amount,amount,amount,amount,amount,target.id),db.prepare(`INSERT INTO coin_transactions(user_id,amount,type,reference_type,reference_id,description) VALUES(?,?,'ADMIN_ADJUSTMENT','ADMIN',?,?)`).bind(target.id,amount,ref,cleanText(b.description,200)||`Admin-Anpassung durch ${u.username}`)]);const w2=await db.prepare('SELECT balance FROM coin_wallets WHERE user_id=?').bind(target.id).first();return json({ok:true,balance:w2.balance})}
+async function adminAwardsOverview(request,env){
+  const db=requireDb(env),admin=await requireAdminPermission(request,env,'awards'),url=new URL(request.url),userId=asId(url.searchParams.get('userId'));
+  const [players,trophies,achievementDefs,recent]=await Promise.all([
+    db.prepare(`SELECT u.id,u.username,p.position,p.avatar_key,c.name club_name FROM users u LEFT JOIN profiles p ON p.user_id=u.id LEFT JOIN club_members cm ON cm.user_id=u.id AND cm.left_at IS NULL LEFT JOIN clubs c ON c.id=cm.club_id WHERE u.status!='BANNED' ORDER BY u.username COLLATE NOCASE`).all(),
+    db.prepare(`SELECT id,name,icon_key,type,season_id FROM trophies ORDER BY CASE type WHEN 'TROPHY' THEN 0 WHEN 'BADGE' THEN 1 ELSE 2 END,name COLLATE NOCASE`).all(),
+    db.prepare(`SELECT id,code,title,description,category,asset_key FROM achievement_definitions WHERE active=1 ORDER BY sort_order,id`).all(),
+    db.prepare(`SELECT l.id,l.user_id,u.username,l.award_kind,l.quantity_delta,l.custom_title,l.note,l.created_at,a.username admin_username,t.name trophy_name,ad.title achievement_title FROM admin_award_log l JOIN users u ON u.id=l.user_id JOIN users a ON a.id=l.admin_user_id LEFT JOIN trophies t ON t.id=l.trophy_id LEFT JOIN achievement_definitions ad ON ad.id=l.achievement_id ORDER BY l.id DESC LIMIT 100`).all()
+  ]);
+  let holdings={trophies:[],achievements:[],custom:[],totwCount:0};
+  if(userId){
+    const [owned,unlocks,custom,totw]=await Promise.all([
+      db.prepare(`SELECT t.id,t.name,t.icon_key,t.type,ut.quantity,ut.awarded_at FROM user_trophies ut JOIN trophies t ON t.id=ut.trophy_id WHERE ut.user_id=? ORDER BY t.type,t.name`).bind(userId).all(),
+      db.prepare(`SELECT ad.id,ad.title,ad.asset_key,ad.category,pau.unlocked_at FROM player_achievement_unlocks pau JOIN achievement_definitions ad ON ad.id=pau.achievement_id WHERE pau.user_id=? ORDER BY pau.unlocked_at DESC`).bind(userId).all(),
+      db.prepare(`SELECT id,title,subtitle,icon_key,awarded_at FROM player_achievements WHERE user_id=? ORDER BY awarded_at DESC`).bind(userId).all(),
+      db.prepare(`SELECT COUNT(*) count FROM totw_selections WHERE user_id=?`).bind(userId).first()
+    ]);
+    holdings={trophies:owned.results||[],achievements:unlocks.results||[],custom:custom.results||[],totwCount:Number(totw?.count||0)};
+  }
+  return json({admin:{id:admin.id,username:admin.username,role:admin.role},players:players.results||[],trophies:trophies.results||[],achievementDefinitions:achievementDefs.results||[],holdings,recent:recent.results||[]});
+}
+
+async function adminAwardGrant(request,env){
+  const db=requireDb(env),admin=await requireAdminPermission(request,env,'awards'),b=await request.json(),userId=asId(b.userId),kind=cleanText(b.kind,20).toUpperCase(),note=cleanText(b.note,300);
+  if(!userId)return fail('Spieler fehlt.');const target=await db.prepare('SELECT id,username FROM users WHERE id=?').bind(userId).first();if(!target)return fail('Spieler nicht gefunden.',404);
+  if(kind==='TROPHY'){
+    const trophyId=asId(b.trophyId),qty=Math.max(1,Math.min(20,Math.trunc(Number(b.quantity)||1)));if(!trophyId)return fail('Trophäe/Badge fehlt.');const award=await db.prepare('SELECT id,name,type FROM trophies WHERE id=?').bind(trophyId).first();if(!award)return fail('Auszeichnung nicht gefunden.',404);
+    await db.batch([
+      db.prepare(`INSERT INTO user_trophies(user_id,trophy_id,quantity,awarded_at) VALUES(?,?,?,datetime('now')) ON CONFLICT(user_id,trophy_id) DO UPDATE SET quantity=user_trophies.quantity+excluded.quantity,awarded_at=datetime('now')`).bind(userId,trophyId,qty),
+      db.prepare(`INSERT INTO admin_award_log(user_id,award_kind,trophy_id,quantity_delta,note,admin_user_id) VALUES(?,'TROPHY',?,?,?,?)`).bind(userId,trophyId,qty,note,admin.id)
+    ]);
+    const row=await db.prepare('SELECT quantity FROM user_trophies WHERE user_id=? AND trophy_id=?').bind(userId,trophyId).first();await notifyUser(db,userId,'AWARD',`${award.name} erhalten`,`${qty>1?qty+'× ':''}${award.type==='BADGE'?'Badge':'Trophäe'} wurde dir von einem EPL Full Admin verliehen.${note?' '+note:''}`,'/spieler/'+target.username.toLowerCase());return json({ok:true,quantity:Number(row?.quantity||qty),name:award.name});
+  }
+  if(kind==='ACHIEVEMENT'){
+    const achievementId=asId(b.achievementId);if(!achievementId)return fail('Achievement fehlt.');const a=await db.prepare('SELECT id,title FROM achievement_definitions WHERE id=? AND active=1').bind(achievementId).first();if(!a)return fail('Achievement nicht gefunden.',404);const exists=await db.prepare('SELECT 1 FROM player_achievement_unlocks WHERE user_id=? AND achievement_id=?').bind(userId,achievementId).first();if(exists)return fail('Dieses Achievement ist bereits freigeschaltet.',409);
+    await db.batch([db.prepare(`INSERT INTO player_achievement_unlocks(user_id,achievement_id,unlocked_at) VALUES(?,?,datetime('now'))`).bind(userId,achievementId),db.prepare(`INSERT INTO admin_award_log(user_id,award_kind,achievement_id,quantity_delta,note,admin_user_id) VALUES(?,'ACHIEVEMENT',?,1,?,?)`).bind(userId,achievementId,note,admin.id)]);await notifyUser(db,userId,'ACHIEVEMENT',`Achievement freigeschaltet: ${a.title}`,note||'Dieses Achievement wurde dir manuell durch einen EPL Full Admin verliehen.','/erfolge');return json({ok:true,name:a.title});
+  }
+  if(kind==='CUSTOM'){
+    const title=cleanText(b.title,120),subtitle=cleanText(b.subtitle,260),iconKey=cleanText(b.iconKey,1200);if(!title)return fail('Titel fehlt.');const r=await db.prepare(`INSERT INTO player_achievements(user_id,title,subtitle,icon_key,awarded_at) VALUES(?,?,?,?,datetime('now')) RETURNING id`).bind(userId,title,subtitle,iconKey||null).first();await db.prepare(`INSERT INTO admin_award_log(user_id,award_kind,custom_title,quantity_delta,note,admin_user_id) VALUES(?,'CUSTOM',?,1,?,?)`).bind(userId,title,note,admin.id).run();await notifyUser(db,userId,'AWARD',title,subtitle||note||'Neue EPL-Auszeichnung erhalten.','/spieler/'+target.username.toLowerCase());return json({ok:true,id:r?.id,title});
+  }
+  return fail('Ungültiger Auszeichnungstyp.');
+}
+
+async function adminAwardRevoke(request,env){
+  const db=requireDb(env),admin=await requireAdminPermission(request,env,'awards'),b=await request.json(),userId=asId(b.userId),kind=cleanText(b.kind,20).toUpperCase(),note=cleanText(b.note,300)||'Durch Full Admin entfernt';if(!userId)return fail('Spieler fehlt.');
+  if(kind==='TROPHY'){
+    const trophyId=asId(b.trophyId),removeAll=bool01(b.removeAll),qty=Math.max(1,Math.min(20,Math.trunc(Number(b.quantity)||1)));
+    if(!trophyId)return fail('Auszeichnung fehlt.');const row=await db.prepare(`SELECT ut.quantity,t.name FROM user_trophies ut JOIN trophies t ON t.id=ut.trophy_id WHERE ut.user_id=? AND ut.trophy_id=?`).bind(userId,trophyId).first();if(!row)return fail('Diese Auszeichnung besitzt der Spieler nicht.',404);const remove=removeAll?Number(row.quantity):Math.min(Number(row.quantity),qty);if(remove>=Number(row.quantity))await db.prepare('DELETE FROM user_trophies WHERE user_id=? AND trophy_id=?').bind(userId,trophyId).run();else await db.prepare(`UPDATE user_trophies SET quantity=quantity-?,awarded_at=datetime('now') WHERE user_id=? AND trophy_id=?`).bind(remove,userId,trophyId).run();await db.prepare(`INSERT INTO admin_award_log(user_id,award_kind,trophy_id,quantity_delta,note,admin_user_id) VALUES(?,'TROPHY',?, ?,?,?)`).bind(userId,trophyId,-remove,note,admin.id).run();return json({ok:true,removed:remove,name:row.name});
+  }
+  if(kind==='ACHIEVEMENT'){
+    const achievementId=asId(b.achievementId);if(!achievementId)return fail('Achievement fehlt.');await db.prepare('DELETE FROM player_achievement_unlocks WHERE user_id=? AND achievement_id=?').bind(userId,achievementId).run();await db.prepare(`INSERT INTO admin_award_log(user_id,award_kind,achievement_id,quantity_delta,note,admin_user_id) VALUES(?,'ACHIEVEMENT',?,-1,?,?)`).bind(userId,achievementId,note,admin.id).run();return json({ok:true});
+  }
+  if(kind==='CUSTOM'){
+    const customId=asId(b.customId);if(!customId)return fail('Auszeichnung fehlt.');const row=await db.prepare('SELECT title FROM player_achievements WHERE id=? AND user_id=?').bind(customId,userId).first();if(!row)return fail('Auszeichnung nicht gefunden.',404);await db.prepare('DELETE FROM player_achievements WHERE id=? AND user_id=?').bind(customId,userId).run();await db.prepare(`INSERT INTO admin_award_log(user_id,award_kind,custom_title,quantity_delta,note,admin_user_id) VALUES(?,'CUSTOM',?,-1,?,?)`).bind(userId,row.title,note,admin.id).run();return json({ok:true});
+  }
+  return fail('Ungültiger Auszeichnungstyp.');
+}
+
 async function submitMatch(route,request,env){
   const db=requireDb(env),u=await requireUser(request,env),id=Number(route.split('/')[1]),b=await request.json();
   const m=await db.prepare('SELECT * FROM matches WHERE id=?').bind(id).first();if(!m)return fail('Match nicht gefunden.',404);
@@ -1270,8 +1330,8 @@ async function achievementView(db,userId){
 async function getAchievementsOverview(request,env){
   const db=requireDb(env),viewer=await currentUser(request,env),url=new URL(request.url),username=cleanText(url.searchParams.get('username')||viewer?.username||'',40);if(!username)return fail('Bitte anmelden oder einen Benutzernamen angeben.',401);
   const u=await db.prepare(`SELECT id,username FROM users WHERE lower(username)=lower(?)`).bind(username).first();if(!u)return fail('Spieler nicht gefunden.',404);
-  const [achievements,manual,trophies,catalog]=await Promise.all([achievementView(db,u.id),db.prepare(`SELECT id,title,subtitle,icon_key,awarded_at FROM player_achievements WHERE user_id=? ORDER BY awarded_at DESC`).bind(u.id).all(),db.prepare(`SELECT t.id,t.name,t.icon_key,t.type,ut.quantity,ut.awarded_at FROM user_trophies ut JOIN trophies t ON t.id=ut.trophy_id WHERE ut.user_id=? ORDER BY ut.awarded_at DESC`).bind(u.id).all(),db.prepare(`SELECT id,name,icon_key,type FROM trophies ORDER BY type,name`).all()]);
-  return json({player:u,achievements,manual:manual.results||[],trophies:trophies.results||[],trophyCatalog:catalog.results||[]});
+  const [achievements,manual,trophies,catalog,totw]=await Promise.all([achievementView(db,u.id),db.prepare(`SELECT id,title,subtitle,icon_key,awarded_at FROM player_achievements WHERE user_id=? ORDER BY awarded_at DESC`).bind(u.id).all(),db.prepare(`SELECT t.id,t.name,t.icon_key,t.type,ut.quantity,ut.awarded_at FROM user_trophies ut JOIN trophies t ON t.id=ut.trophy_id WHERE ut.user_id=? ORDER BY ut.awarded_at DESC`).bind(u.id).all(),db.prepare(`SELECT id,name,icon_key,type FROM trophies ORDER BY type,name`).all(),db.prepare(`SELECT COUNT(*) count FROM totw_selections WHERE user_id=?`).bind(u.id).first()]);
+  return json({player:u,achievements,manual:manual.results||[],trophies:trophies.results||[],trophyCatalog:catalog.results||[],totwCount:Number(totw?.count||0)});
 }
 async function careerForUser(db,userId){
   const seasons=(await db.prepare(`SELECT s.id season_id,s.name season_name,c.id club_id,c.name club_name,c.slug club_slug,d.name division_name,p.position,
@@ -1357,10 +1417,12 @@ async function getProfile(slug,request,env){
   ]);
   let inventory=[];
   if(viewer?.id===p.id){const inv=await db.prepare(`SELECT si.id,si.name,si.category,si.description,si.rarity,si.asset_key,si.price_coins,si.price_eur_cents,ui.acquired_at FROM user_inventory ui JOIN shop_items si ON si.id=ui.item_id WHERE ui.user_id=? ORDER BY ui.acquired_at DESC`).bind(p.id).all();inventory=inv.results||[];}
-  const [achievementProgress,career,marketRow,trophyRows,marketHistoryRows]=await Promise.all([achievementView(db,p.id),careerForUser(db,p.id),marketRowForUser(db,p.id),db.prepare(`SELECT t.name title,('x'||ut.quantity) subtitle,t.icon_key,ut.awarded_at FROM user_trophies ut JOIN trophies t ON t.id=ut.trophy_id WHERE ut.user_id=? ORDER BY ut.awarded_at DESC`).bind(p.id).all(),db.prepare(`SELECT value_eur,reason,created_at FROM market_value_snapshots WHERE user_id=? ORDER BY id DESC LIMIT 12`).bind(p.id).all()]);
+  const [achievementProgress,career,marketRow,trophyRows,marketHistoryRows]=await Promise.all([achievementView(db,p.id),careerForUser(db,p.id),marketRowForUser(db,p.id),db.prepare(`SELECT t.id,t.name title,('x'||ut.quantity) subtitle,t.icon_key,t.type award_type,ut.quantity,ut.awarded_at FROM user_trophies ut JOIN trophies t ON t.id=ut.trophy_id WHERE ut.user_id=? ORDER BY ut.awarded_at DESC`).bind(p.id).all(),db.prepare(`SELECT value_eur,reason,created_at FROM market_value_snapshots WHERE user_id=? ORDER BY id DESC LIMIT 12`).bind(p.id).all()]);
   const unlockedAuto=achievementProgress.filter(x=>x.unlocked).map(x=>({id:`achievement-${x.id}`,title:x.title,subtitle:x.description,icon_key:x.asset_key,awarded_at:x.unlocked_at,category:x.category}));
+  const totwHistory=await db.prepare(`SELECT COUNT(*) count,MAX(selected_at) awarded_at FROM totw_selections WHERE user_id=?`).bind(p.id).first();
+  const totwAwards=Number(totwHistory?.count||0)>0?[{id:'totw-history',title:'EPL Team of the Week',subtitle:`x${Number(totwHistory.count)}`,icon_key:'/assets/totw/SpielerDerWocheRahmen.png',quantity:Number(totwHistory.count),award_type:'TOTW',awarded_at:totwHistory.awarded_at}]:[];
   p.market_value=marketRow?marketValueFromRow(marketRow):250000;
-  return json({profile:p,stats:stats||{},posts:posts.results||[],recentMatches:recentMatches.results||[],achievements:[...(trophyRows.results||[]),...unlockedAuto,...(achievements.results||[])],achievementProgress,career,marketHistory:marketHistoryRows.results||[],clubHistory:clubHistory.results||[],inventory,badges:badges.results||[]});
+  return json({profile:p,stats:stats||{},posts:posts.results||[],recentMatches:recentMatches.results||[],achievements:[...totwAwards,...(trophyRows.results||[]),...unlockedAuto,...(achievements.results||[])],achievementProgress,career,marketHistory:marketHistoryRows.results||[],clubHistory:clubHistory.results||[],inventory,badges:badges.results||[]});
 }
 async function getClub(slug,request,env){
   const db=requireDb(env),viewer=await currentUser(request,env);
