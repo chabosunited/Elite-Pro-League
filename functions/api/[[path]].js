@@ -39,6 +39,9 @@ export async function onRequest(context){
     if(route === 'shop/catalog' && method === 'GET') return getShopCatalog(env);
     if(route === 'cms/public' && method === 'GET') return getCmsPublic(env);
     if(route === 'goals' && method === 'GET') return getSeasonGoals(request,env);
+    if(route === 'achievements' && method === 'GET') return getAchievementsOverview(request,env);
+    if(route === 'market-values' && method === 'GET') return getMarketValues(request,env);
+    if(route === 'daily-hub' && method === 'GET') return getDailyHub(request,env);
     if(route === 'goals/select' && method === 'POST') return selectPlayerGoals(request,env);
     if(route === 'shop/equip' && method === 'POST') return equipItem(request,env);
     if(route === 'shop/remove-owned' && method === 'POST') return removeOwnedItem(request,env);
@@ -81,6 +84,9 @@ export async function onRequest(context){
     if(route === 'reports' && method === 'POST') return createReport(request,env);
     if(route === 'admin/coin-award' && method === 'POST') return adminCoinAward(request,env);
     if(route === 'admin/overview' && method === 'GET') return adminOverview(request,env);
+    if(route === 'admin/totw' && method === 'GET') return adminTotwOverview(request,env);
+    if(route === 'admin/totw/candidates' && method === 'GET') return adminTotwCandidates(request,env);
+    if(route === 'admin/totw/award' && method === 'POST') return adminTotwAward(request,env);
     if(route === 'admin/reports' && method === 'GET') return adminReports(request,env);
     if(/^admin\/report\/\d+$/.test(route) && method === 'GET') return adminReportDetail(route,request,env);
     if(route === 'admin/cms' && method === 'GET') return adminCmsOverview(request,env);
@@ -251,7 +257,7 @@ async function uniqueUsername(db,value,providerId){
 }
 async function currentUser(request,env){
   const db=requireDb(env), sid=cookieMap(request).epl_session;if(!sid)return null;
-  const row=await db.prepare(`SELECT u.id,u.email,u.username,u.role,u.status,p.avatar_key,p.cover_key,p.ea_id,p.platform,p.position,p.secondary_position,p.country,p.bio,p.discord,p.free_agent,p.equipped_avatar_frame_id,p.equipped_cover_frame_id,p.equipped_name_effect_id,p.equipped_badge_id,
+  const row=await db.prepare(`SELECT u.id,u.email,u.username,u.role,u.status,p.avatar_key,p.cover_key,p.ea_id,p.platform,p.position,p.secondary_position,p.country,p.bio,p.discord,p.free_agent,p.equipped_avatar_frame_id,p.equipped_cover_frame_id,p.equipped_name_effect_id,p.equipped_badge_id,p.use_totw_frame,
       COALESCE(w.balance,0) AS coins,COALESCE(po.shirt_number,0) AS shirt_number,
       COALESCE(po.completed,CASE WHEN length(trim(COALESCE(p.ea_id,'')))>0 AND length(trim(COALESCE(p.position,'')))>0 THEN 1 ELSE 0 END) AS profile_completed
     FROM sessions s JOIN users u ON u.id=s.user_id LEFT JOIN profiles p ON p.user_id=u.id LEFT JOIN coin_wallets w ON w.user_id=u.id LEFT JOIN profile_onboarding po ON po.user_id=u.id
@@ -390,16 +396,18 @@ async function socialFeed(request,env){
 }
 async function getInventory(request,env){
   const db=requireDb(env),u=await requireUser(request,env);
-  const [items,p]=await Promise.all([
+  const [items,p,totw]=await Promise.all([
     db.prepare(`SELECT si.id,si.sku,si.name,si.category,si.description,si.price_coins,si.price_eur_cents,si.asset_key,si.rarity,ui.acquired_at
       FROM user_inventory ui JOIN shop_items si ON si.id=ui.item_id WHERE ui.user_id=? ORDER BY ui.acquired_at DESC`).bind(u.id).all(),
-    db.prepare(`SELECT equipped_avatar_frame_id,equipped_cover_frame_id,equipped_name_effect_id,equipped_badge_id FROM profiles WHERE user_id=?`).bind(u.id).first()
+    db.prepare(`SELECT equipped_avatar_frame_id,equipped_cover_frame_id,equipped_name_effect_id,equipped_badge_id,use_totw_frame FROM profiles WHERE user_id=?`).bind(u.id).first(),
+    db.prepare(`SELECT id,season_id,division_id,matchday,slot_label,selected_at,expires_at FROM totw_selections WHERE user_id=? AND expires_at>datetime('now') ORDER BY expires_at DESC LIMIT 1`).bind(u.id).first()
   ]);
-  return json({items:items.results||[],equipped:{avatarFrame:p?.equipped_avatar_frame_id||null,coverFrame:p?.equipped_cover_frame_id||null,nameEffect:p?.equipped_name_effect_id||null,badge:p?.equipped_badge_id||null}});
+  if(!totw&&Number(p?.use_totw_frame))await db.prepare(`UPDATE profiles SET use_totw_frame=0 WHERE user_id=?`).bind(u.id).run();
+  return json({items:items.results||[],equipped:{avatarFrame:totw&&Number(p?.use_totw_frame)?'TOTW':(p?.equipped_avatar_frame_id||null),coverFrame:p?.equipped_cover_frame_id||null,nameEffect:p?.equipped_name_effect_id||null,badge:p?.equipped_badge_id||null},totw:totw?{available:true,equipped:!!Number(p?.use_totw_frame),expiresAt:totw.expires_at,matchday:totw.matchday,assetKey:'/assets/totw/SpielerDerWocheRahmen.png'}:{available:false,equipped:false,assetKey:'/assets/totw/SpielerDerWocheRahmen.png'}});
 }
 async function equipItem(request,env){
   const db=requireDb(env),u=await requireUser(request,env),b=await request.json();
-  const slot=cleanText(b.slot,30),itemId=b.itemId===null||b.itemId===''?null:Number(b.itemId);
+  const slot=cleanText(b.slot,30),rawItem=b.itemId,itemId=rawItem===null||rawItem===''?null:(String(rawItem).toUpperCase()==='TOTW'?'TOTW':Number(rawItem));
   const slots={
     avatar_frame:{category:'AVATAR_FRAME',col:'equipped_avatar_frame_id'},avatarFrame:{category:'AVATAR_FRAME',col:'equipped_avatar_frame_id'},
     cover_frame:{category:'COVER_FRAME',col:'equipped_cover_frame_id'},coverFrame:{category:'COVER_FRAME',col:'equipped_cover_frame_id'},
@@ -407,15 +415,22 @@ async function equipItem(request,env){
     badge:{category:'BADGE',col:'equipped_badge_id'}
   };
   const cfg=slots[slot];if(!cfg)return fail('Ungültiger Cosmetic-Slot.');
+  if(itemId==='TOTW'){
+    if(cfg.category!=='AVATAR_FRAME')return fail('TOTW kann nur als Profilbildrahmen verwendet werden.',409);
+    const active=await db.prepare(`SELECT id,expires_at FROM totw_selections WHERE user_id=? AND expires_at>datetime('now') ORDER BY expires_at DESC LIMIT 1`).bind(u.id).first();
+    if(!active)return fail('Dein TOTW-Rahmen ist nicht mehr aktiv.',403);
+    await db.prepare(`UPDATE profiles SET use_totw_frame=1,updated_at=datetime('now') WHERE user_id=?`).bind(u.id).run();
+    return getInventory(request,env);
+  }
   if(itemId!==null){
     if(!Number.isInteger(itemId)||itemId<=0)return fail('Ungültiges Shop-Item.');
     const owned=await db.prepare(`SELECT si.id,si.category FROM user_inventory ui JOIN shop_items si ON si.id=ui.item_id WHERE ui.user_id=? AND ui.item_id=?`).bind(u.id,itemId).first();
     if(!owned)return fail('Dieses Cosmetic befindet sich nicht in deinem Inventar.',403);
     if(owned.category!==cfg.category)return fail('Dieses Cosmetic passt nicht in den gewählten Slot.',409);
   }
-  await db.prepare(`UPDATE profiles SET ${cfg.col}=?,updated_at=datetime('now') WHERE user_id=?`).bind(itemId,u.id).run();
-  await db.prepare(`UPDATE user_inventory SET equipped=CASE WHEN item_id=? THEN 1 ELSE 0 END WHERE user_id=? AND item_id IN (SELECT id FROM shop_items WHERE category=?)`).bind(itemId||-1,u.id,cfg.category).run();
-  return getInventory(request,env);
+  const stmts=[db.prepare(`UPDATE profiles SET ${cfg.col}=?,${cfg.category==='AVATAR_FRAME'?'use_totw_frame=0,':''}updated_at=datetime('now') WHERE user_id=?`).bind(itemId,u.id)];
+  stmts.push(db.prepare(`UPDATE user_inventory SET equipped=CASE WHEN item_id=? THEN 1 ELSE 0 END WHERE user_id=? AND item_id IN (SELECT id FROM shop_items WHERE category=?)`).bind(itemId||-1,u.id,cfg.category));
+  await db.batch(stmts);return getInventory(request,env);
 }
 
 
@@ -1036,7 +1051,9 @@ async function adminMatchResult(request,env){
   }
   for(let i=0;i<statStmts.length;i+=40)await db.batch(statStmts.slice(i,i+40));
   await db.prepare(`UPDATE matches SET home_score=?,away_score=?,status='CONFIRMED',confirmed_by=?,notes=?,updated_at=datetime('now') WHERE id=?`).bind(hs,as,admin.id,cleanText(b.notes,500),id).run();
-  if(!wasConfirmed)await awardMatchCoins(db,{...m,home_score:hs,away_score:as});return json({ok:true});
+  if(!wasConfirmed)await awardMatchCoins(db,{...m,home_score:hs,away_score:as});
+  const playedUsers=[...new Set(stats.filter(x=>x&&x.played&&asId(x.userId)).map(x=>asId(x.userId)))];for(const uid of playedUsers){try{await evaluateAchievements(db,uid);const mv=await marketRowForUser(db,uid);if(mv){const value=marketValueFromRow(mv),last=await db.prepare(`SELECT value_eur FROM market_value_snapshots WHERE user_id=? ORDER BY id DESC LIMIT 1`).bind(uid).first();if(!last||Number(last.value_eur)!==value)await db.prepare(`INSERT INTO market_value_snapshots(user_id,value_eur,reason) VALUES(?,?,'MATCH_CONFIRMED')`).bind(uid,value).run();}}catch{}}
+  return json({ok:true});
 }
 async function adminNewsSave(request,env){
   const db=requireDb(env),admin=await requireAdminPermission(request,env,'news'),b=await request.json(),id=asId(b.id),title=cleanText(b.title,160),body=cleanText(b.body,20000),status=['DRAFT','PUBLISHED','ARCHIVED'].includes(b.status)?b.status:'DRAFT';if(!title||!body)return fail('Titel und Inhalt sind erforderlich.');const slug=slugify(b.slug||title),excerpt=cleanText(b.excerpt,400),imageKey=cleanText(b.imageKey,1200)||null,published=status==='PUBLISHED'?(b.publishedAt||new Date().toISOString()):null;
@@ -1201,6 +1218,109 @@ async function awardMatchCoins(db,m){
     await addClubReputation(db,clubId,winner===clubId?15:10,'MATCH','MATCH',String(m.id),winner===clubId?'Match gespielt + Sieg':'Match gespielt');
   }
 }
+
+// ============================================================
+// EPL v10: manual TOTW, achievements, career, market values, daily hub
+// ============================================================
+function marketValueFromRow(r={}){
+  const matches=Number(r.matches||0),goals=Number(r.goals||0),assists=Number(r.assists||0),saves=Number(r.saves||0),clean=Number(r.clean_sheets||0),motm=Number(r.motm||0),rating=Number(r.avg_rating||0),form=Number(r.form_rating||0),totw=Number(r.totw_count||0),unlocks=Number(r.achievement_count||0),level=Number(r.division_level||0),gk=String(r.position||'').toUpperCase()==='TW';
+  // EPL-only virtual market value. Deliberately NO age factor: performance, experience, league level and awards decide the value.
+  let value=350000+Math.min(matches,300)*18000;
+  if(rating>0)value+=Math.max(0,rating-6)*900000;
+  if(form>0)value+=(form-6.5)*400000; // recent five-match form can raise or lower the value
+  value+=gk?(saves*6000+clean*85000):(goals*55000+assists*40000);
+  value+=motm*70000+Math.min(totw,7)*100000+Math.min(unlocks,10)*60000;
+  const mult=level===1?1.25:level===2?1.12:level===3?1:level>3?.95:.92;
+  value*=mult;return Math.max(250000,Math.min(50000000,Math.round(value/10000)*10000));
+}
+async function marketRowForUser(db,userId){
+  return db.prepare(`SELECT u.id,u.username,p.position,p.avatar_key,p.overall,d.level division_level,c.name club_name,c.slug club_slug,
+    COUNT(DISTINCT CASE WHEN m.status='CONFIRMED' THEN ps.match_id END) matches,
+    COALESCE(SUM(CASE WHEN m.status='CONFIRMED' THEN ps.goals ELSE 0 END),0) goals,
+    COALESCE(SUM(CASE WHEN m.status='CONFIRMED' THEN ps.assists ELSE 0 END),0) assists,
+    COALESCE(SUM(CASE WHEN m.status='CONFIRMED' THEN ps.saves ELSE 0 END),0) saves,
+    COALESCE(SUM(CASE WHEN m.status='CONFIRMED' THEN ps.clean_sheet ELSE 0 END),0) clean_sheets,
+    COALESCE(SUM(CASE WHEN m.status='CONFIRMED' THEN ps.motm ELSE 0 END),0) motm,
+    ROUND(AVG(CASE WHEN m.status='CONFIRMED' THEN ps.rating END),2) avg_rating,
+    (SELECT ROUND(AVG(f.rating),2) FROM (SELECT ps2.rating FROM player_stats ps2 JOIN matches m2 ON m2.id=ps2.match_id WHERE ps2.user_id=u.id AND m2.status='CONFIRMED' ORDER BY COALESCE(NULLIF(m2.scheduled_at,''),m2.created_at) DESC,m2.id DESC LIMIT 5) f) form_rating,
+    (SELECT COUNT(*) FROM totw_selections t WHERE t.user_id=u.id) totw_count,
+    (SELECT COUNT(*) FROM player_achievement_unlocks au WHERE au.user_id=u.id) achievement_count
+    FROM users u LEFT JOIN profiles p ON p.user_id=u.id LEFT JOIN club_members cm ON cm.user_id=u.id AND cm.left_at IS NULL LEFT JOIN clubs c ON c.id=cm.club_id LEFT JOIN divisions d ON d.id=c.division_id
+    LEFT JOIN player_stats ps ON ps.user_id=u.id LEFT JOIN matches m ON m.id=ps.match_id WHERE u.id=? GROUP BY u.id`).bind(userId).first();
+}
+async function achievementMetrics(db,userId){
+  const agg=await db.prepare(`SELECT COUNT(DISTINCT ps.match_id) matches,COALESCE(SUM(ps.goals),0) goals,COALESCE(SUM(ps.assists),0) assists,COALESCE(SUM(ps.clean_sheet),0) clean_sheets FROM player_stats ps JOIN matches m ON m.id=ps.match_id WHERE ps.user_id=? AND m.status='CONFIRMED'`).bind(userId).first();
+  const oneClub=await db.prepare(`SELECT MAX(cnt) value FROM (SELECT ps.club_id,COUNT(DISTINCT ps.match_id) cnt FROM player_stats ps JOIN matches m ON m.id=ps.match_id WHERE ps.user_id=? AND m.status='CONFIRMED' GROUP BY ps.club_id)`).bind(userId).first();
+  const seasonsClub=await db.prepare(`SELECT MAX(cnt) value FROM (SELECT ps.club_id,COUNT(DISTINCT m.season_id) cnt FROM player_stats ps JOIN matches m ON m.id=ps.match_id WHERE ps.user_id=? AND m.status='CONFIRMED' GROUP BY ps.club_id)`).bind(userId).first();
+  const rival=await db.prepare(`SELECT MAX(g) value FROM (SELECT CASE WHEN m.home_club_id=ps.club_id THEN m.away_club_id ELSE m.home_club_id END opponent,SUM(ps.goals) g FROM player_stats ps JOIN matches m ON m.id=ps.match_id WHERE ps.user_id=? AND m.status='CONFIRMED' GROUP BY opponent)`).bind(userId).first();
+  const games=(await db.prepare(`SELECT ps.club_id,m.home_club_id,m.away_club_id,m.home_score,m.away_score FROM player_stats ps JOIN matches m ON m.id=ps.match_id WHERE ps.user_id=? AND m.status='CONFIRMED' ORDER BY COALESCE(NULLIF(m.scheduled_at,''),m.created_at),m.id`).bind(userId).all()).results||[];
+  let streak=0,best=0;for(const g of games){const own=Number(g.club_id)===Number(g.home_club_id)?Number(g.home_score):Number(g.away_score),opp=Number(g.club_id)===Number(g.home_club_id)?Number(g.away_score):Number(g.home_score);if(own>=opp){streak++;best=Math.max(best,streak)}else streak=0;}
+  const top=await db.prepare(`WITH totals AS (SELECT m.season_id,ps.user_id,SUM(ps.goals) goals FROM player_stats ps JOIN matches m ON m.id=ps.match_id JOIN seasons s ON s.id=m.season_id WHERE m.status='CONFIRMED' AND s.status='FINISHED' GROUP BY m.season_id,ps.user_id), mx AS (SELECT season_id,MAX(goals) max_goals FROM totals GROUP BY season_id) SELECT COUNT(*) value FROM totals t JOIN mx ON mx.season_id=t.season_id AND mx.max_goals=t.goals WHERE t.user_id=? AND t.goals>0`).bind(userId).first();
+  return {GOALS_TOTAL:Number(agg?.goals||0),ASSISTS_TOTAL:Number(agg?.assists||0),CLEAN_SHEETS:Number(agg?.clean_sheets||0),MATCHES_TOTAL:Number(agg?.matches||0),MATCHES_ONE_CLUB:Number(oneClub?.value||0),SEASONS_SAME_CLUB:Number(seasonsClub?.value||0),UNBEATEN_STREAK:best,GOALS_VS_RIVAL:Number(rival?.value||0),TOP_SCORER:Number(top?.value||0)};
+}
+async function evaluateAchievements(db,userId){
+  const defs=(await db.prepare(`SELECT * FROM achievement_definitions WHERE active=1 ORDER BY sort_order,id`).all()).results||[],metrics=await achievementMetrics(db,userId),existing=new Set(((await db.prepare(`SELECT achievement_id FROM player_achievement_unlocks WHERE user_id=?`).bind(userId).all()).results||[]).map(x=>Number(x.achievement_id))),unlocked=[];
+  for(const d of defs){const progress=Number(metrics[d.metric]||0);if(progress>=Number(d.target_value)&&!existing.has(Number(d.id))){await db.prepare(`INSERT OR IGNORE INTO player_achievement_unlocks(user_id,achievement_id) VALUES(?,?)`).bind(userId,d.id).run();await notifyUser(db,userId,'ACHIEVEMENT',`Achievement freigeschaltet: ${d.title}`,d.description,'/erfolge');unlocked.push(d.id);}}
+  return {defs,metrics,unlocked};
+}
+async function achievementView(db,userId){
+  const ev=await evaluateAchievements(db,userId),unlocks=(await db.prepare(`SELECT achievement_id,unlocked_at FROM player_achievement_unlocks WHERE user_id=?`).bind(userId).all()).results||[],map=new Map(unlocks.map(x=>[Number(x.achievement_id),x.unlocked_at]));
+  return ev.defs.map(d=>({...d,progress:Number(ev.metrics[d.metric]||0),unlocked:map.has(Number(d.id)),unlocked_at:map.get(Number(d.id))||null}));
+}
+async function getAchievementsOverview(request,env){
+  const db=requireDb(env),viewer=await currentUser(request,env),url=new URL(request.url),username=cleanText(url.searchParams.get('username')||viewer?.username||'',40);if(!username)return fail('Bitte anmelden oder einen Benutzernamen angeben.',401);
+  const u=await db.prepare(`SELECT id,username FROM users WHERE lower(username)=lower(?)`).bind(username).first();if(!u)return fail('Spieler nicht gefunden.',404);
+  const [achievements,manual,trophies,catalog]=await Promise.all([achievementView(db,u.id),db.prepare(`SELECT id,title,subtitle,icon_key,awarded_at FROM player_achievements WHERE user_id=? ORDER BY awarded_at DESC`).bind(u.id).all(),db.prepare(`SELECT t.id,t.name,t.icon_key,t.type,ut.quantity,ut.awarded_at FROM user_trophies ut JOIN trophies t ON t.id=ut.trophy_id WHERE ut.user_id=? ORDER BY ut.awarded_at DESC`).bind(u.id).all(),db.prepare(`SELECT id,name,icon_key,type FROM trophies ORDER BY type,name`).all()]);
+  return json({player:u,achievements,manual:manual.results||[],trophies:trophies.results||[],trophyCatalog:catalog.results||[]});
+}
+async function careerForUser(db,userId){
+  const seasons=(await db.prepare(`SELECT s.id season_id,s.name season_name,c.id club_id,c.name club_name,c.slug club_slug,d.name division_name,p.position,
+    COUNT(DISTINCT ps.match_id) matches,COALESCE(SUM(ps.goals),0) goals,COALESCE(SUM(ps.assists),0) assists,COALESCE(SUM(ps.saves),0) saves,COALESCE(SUM(ps.clean_sheet),0) clean_sheets,COALESCE(SUM(ps.motm),0) motm,ROUND(AVG(ps.rating),2) rating
+    FROM player_stats ps JOIN matches m ON m.id=ps.match_id JOIN seasons s ON s.id=m.season_id JOIN clubs c ON c.id=ps.club_id LEFT JOIN divisions d ON d.id=m.division_id LEFT JOIN profiles p ON p.user_id=ps.user_id
+    WHERE ps.user_id=? AND m.status='CONFIRMED' GROUP BY s.id,c.id ORDER BY s.id DESC`).bind(userId).all()).results||[];
+  const clubs=(await db.prepare(`SELECT c.name,c.slug,cm.role,cm.joined_at,cm.left_at FROM club_members cm JOIN clubs c ON c.id=cm.club_id WHERE cm.user_id=? ORDER BY cm.joined_at DESC`).bind(userId).all()).results||[];
+  const transfers=(await db.prepare(`SELECT t.type,t.occurred_at,fc.name from_club,tc.name to_club FROM transfers t LEFT JOIN clubs fc ON fc.id=t.from_club_id LEFT JOIN clubs tc ON tc.id=t.to_club_id WHERE t.user_id=? ORDER BY t.occurred_at DESC`).bind(userId).all()).results||[];
+  return {seasons,clubs,transfers};
+}
+async function getMarketValues(request,env){
+  const db=requireDb(env),url=new URL(request.url),username=cleanText(url.searchParams.get('username')||'',40);
+  const rows=(await db.prepare(`SELECT u.id,u.username,p.position,p.avatar_key,p.overall,d.level division_level,c.name club_name,c.slug club_slug,
+    COUNT(DISTINCT CASE WHEN m.status='CONFIRMED' THEN ps.match_id END) matches,COALESCE(SUM(CASE WHEN m.status='CONFIRMED' THEN ps.goals ELSE 0 END),0) goals,COALESCE(SUM(CASE WHEN m.status='CONFIRMED' THEN ps.assists ELSE 0 END),0) assists,COALESCE(SUM(CASE WHEN m.status='CONFIRMED' THEN ps.saves ELSE 0 END),0) saves,COALESCE(SUM(CASE WHEN m.status='CONFIRMED' THEN ps.clean_sheet ELSE 0 END),0) clean_sheets,COALESCE(SUM(CASE WHEN m.status='CONFIRMED' THEN ps.motm ELSE 0 END),0) motm,ROUND(AVG(CASE WHEN m.status='CONFIRMED' THEN ps.rating END),2) avg_rating,(SELECT ROUND(AVG(f.rating),2) FROM (SELECT ps2.rating FROM player_stats ps2 JOIN matches m2 ON m2.id=ps2.match_id WHERE ps2.user_id=u.id AND m2.status='CONFIRMED' ORDER BY COALESCE(NULLIF(m2.scheduled_at,''),m2.created_at) DESC,m2.id DESC LIMIT 5) f) form_rating,(SELECT COUNT(*) FROM totw_selections t WHERE t.user_id=u.id) totw_count,(SELECT COUNT(*) FROM player_achievement_unlocks au WHERE au.user_id=u.id) achievement_count
+    FROM users u LEFT JOIN profiles p ON p.user_id=u.id LEFT JOIN club_members cm ON cm.user_id=u.id AND cm.left_at IS NULL LEFT JOIN clubs c ON c.id=cm.club_id LEFT JOIN divisions d ON d.id=c.division_id LEFT JOIN player_stats ps ON ps.user_id=u.id LEFT JOIN matches m ON m.id=ps.match_id WHERE u.status='ACTIVE' AND (?='' OR lower(u.username)=lower(?)) GROUP BY u.id ORDER BY u.username`).bind(username,username).all()).results||[];
+  const valued=rows.map(r=>({...r,market_value:marketValueFromRow(r)})).sort((a,b)=>b.market_value-a.market_value);return json({players:valued.slice(0,username?1:200)});
+}
+async function getDailyHub(request,env){
+  const db=requireDb(env),u=await requireUser(request,env);await evaluateAchievements(db,u.id);
+  const club=await db.prepare(`SELECT c.id,c.name,c.slug,d.id division_id,d.name division_name,d.season_id FROM club_members cm JOIN clubs c ON c.id=cm.club_id LEFT JOIN divisions d ON d.id=c.division_id WHERE cm.user_id=? AND cm.left_at IS NULL LIMIT 1`).bind(u.id).first();
+  const upcoming=club?await db.prepare(`SELECT m.id,m.scheduled_at,m.matchday,h.name home_name,a.name away_name,d.name division_name FROM matches m JOIN clubs h ON h.id=m.home_club_id JOIN clubs a ON a.id=m.away_club_id LEFT JOIN divisions d ON d.id=m.division_id WHERE (m.home_club_id=? OR m.away_club_id=?) AND m.status='SCHEDULED' ORDER BY CASE WHEN m.scheduled_at='' THEN 1 ELSE 0 END,m.scheduled_at,m.matchday LIMIT 1`).bind(club.id,club.id).first():null;
+  const [unread,msgs,wallet,latestUnlocks,market]=await Promise.all([db.prepare(`SELECT COUNT(*) count FROM notifications WHERE user_id=? AND read_at IS NULL`).bind(u.id).first(),db.prepare(`SELECT COUNT(*) count FROM direct_messages dm JOIN conversations c ON c.id=dm.conversation_id WHERE (c.user_a=? OR c.user_b=?) AND dm.sender_user_id<>? AND dm.read_at IS NULL AND dm.deleted_at IS NULL`).bind(u.id,u.id,u.id).first(),db.prepare(`SELECT balance FROM coin_wallets WHERE user_id=?`).bind(u.id).first(),db.prepare(`SELECT ad.title,ad.asset_key,pau.unlocked_at FROM player_achievement_unlocks pau JOIN achievement_definitions ad ON ad.id=pau.achievement_id WHERE pau.user_id=? ORDER BY pau.unlocked_at DESC LIMIT 3`).bind(u.id).all(),marketRowForUser(db,u.id)]);
+  const totw=await db.prepare(`SELECT matchday,expires_at FROM totw_selections WHERE user_id=? AND expires_at>datetime('now') ORDER BY expires_at DESC LIMIT 1`).bind(u.id).first();
+  let clubStanding=null;if(club?.division_id&&club?.season_id){clubStanding=await db.prepare(`WITH memberships AS (SELECT season_id,division_id,club_id,points_adjustment FROM season_clubs WHERE season_id=? AND division_id=? UNION SELECT d.season_id,d.id,c.id,0 FROM clubs c JOIN divisions d ON d.id=c.division_id WHERE d.season_id=? AND d.id=? AND NOT EXISTS(SELECT 1 FROM season_clubs sc WHERE sc.season_id=d.season_id AND sc.club_id=c.id)), stats AS (SELECT mem.club_id,COUNT(m.id) played,SUM(CASE WHEN (m.home_club_id=mem.club_id AND m.home_score>m.away_score) OR (m.away_club_id=mem.club_id AND m.away_score>m.home_score) THEN 1 ELSE 0 END) wins,SUM(CASE WHEN m.id IS NOT NULL AND m.home_score=m.away_score THEN 1 ELSE 0 END) draws,SUM(CASE WHEN m.home_club_id=mem.club_id THEN m.home_score WHEN m.away_club_id=mem.club_id THEN m.away_score ELSE 0 END) gf,SUM(CASE WHEN m.home_club_id=mem.club_id THEN m.away_score WHEN m.away_club_id=mem.club_id THEN m.home_score ELSE 0 END) ga FROM memberships mem LEFT JOIN matches m ON m.season_id=? AND m.division_id=? AND (m.home_club_id=mem.club_id OR m.away_club_id=mem.club_id) AND m.status='CONFIRMED' GROUP BY mem.club_id), ranked AS (SELECT mem.club_id,COALESCE(st.played,0) played,COALESCE(st.wins,0) wins,COALESCE(st.draws,0) draws,COALESCE(st.gf,0) gf,COALESCE(st.ga,0) ga,(COALESCE(st.wins,0)*3+COALESCE(st.draws,0)+COALESCE(mem.points_adjustment,0)) points,ROW_NUMBER() OVER(ORDER BY (COALESCE(st.wins,0)*3+COALESCE(st.draws,0)+COALESCE(mem.points_adjustment,0)) DESC,(COALESCE(st.gf,0)-COALESCE(st.ga,0)) DESC,COALESCE(st.gf,0) DESC,c.name) position,COUNT(*) OVER() total_clubs FROM memberships mem JOIN clubs c ON c.id=mem.club_id LEFT JOIN stats st ON st.club_id=mem.club_id) SELECT * FROM ranked WHERE club_id=?`).bind(club.season_id,club.division_id,club.season_id,club.division_id,club.season_id,club.division_id,club.id).first();}
+  return json({user:{id:u.id,username:u.username,coins:Number(wallet?.balance||0)},club,clubStanding,upcoming,unreadNotifications:Number(unread?.count||0),unreadMessages:Number(msgs?.count||0),marketValue:market?marketValueFromRow(market):250000,totw,latestAchievements:latestUnlocks.results||[]});
+}
+async function adminTotwOverview(request,env){
+  const db=requireDb(env);await requireAdminPermission(request,env,'matches');
+  const [seasons,divisions,players,selections]=await Promise.all([db.prepare(`SELECT id,name,status FROM seasons ORDER BY id DESC`).all(),db.prepare(`SELECT d.id,d.name,d.level,d.season_id,s.name season_name FROM divisions d JOIN seasons s ON s.id=d.season_id ORDER BY s.id DESC,d.level`).all(),db.prepare(`SELECT u.id,u.username,p.position,p.avatar_key,c.name club_name,c.division_id,d.name division_name,COUNT(DISTINCT CASE WHEN m.status='CONFIRMED' THEN ps.match_id END) matches,COALESCE(SUM(CASE WHEN m.status='CONFIRMED' THEN ps.goals ELSE 0 END),0) goals,COALESCE(SUM(CASE WHEN m.status='CONFIRMED' THEN ps.assists ELSE 0 END),0) assists,COALESCE(SUM(CASE WHEN m.status='CONFIRMED' THEN ps.saves ELSE 0 END),0) saves,COALESCE(SUM(CASE WHEN m.status='CONFIRMED' THEN ps.clean_sheet ELSE 0 END),0) clean_sheets,ROUND(AVG(CASE WHEN m.status='CONFIRMED' THEN ps.rating END),2) rating FROM users u LEFT JOIN profiles p ON p.user_id=u.id LEFT JOIN club_members cm ON cm.user_id=u.id AND cm.left_at IS NULL LEFT JOIN clubs c ON c.id=cm.club_id LEFT JOIN divisions d ON d.id=c.division_id LEFT JOIN player_stats ps ON ps.user_id=u.id LEFT JOIN matches m ON m.id=ps.match_id WHERE u.status='ACTIVE' GROUP BY u.id ORDER BY c.name,u.username`).all(),db.prepare(`SELECT t.*,u.username,p.position,c.name club_name,s.name season_name,d.name division_name,au.username selected_by_name FROM totw_selections t JOIN users u ON u.id=t.user_id LEFT JOIN profiles p ON p.user_id=u.id LEFT JOIN club_members cm ON cm.user_id=u.id AND cm.left_at IS NULL LEFT JOIN clubs c ON c.id=cm.club_id JOIN seasons s ON s.id=t.season_id LEFT JOIN divisions d ON d.id=t.division_id JOIN users au ON au.id=t.selected_by ORDER BY t.selected_at DESC LIMIT 100`).all()]);
+  return json({seasons:seasons.results||[],divisions:divisions.results||[],players:players.results||[],selections:selections.results||[],frameAsset:'/assets/totw/SpielerDerWocheRahmen.png'});
+}
+async function adminTotwCandidates(request,env){
+  const db=requireDb(env);await requireAdminPermission(request,env,'matches');const url=new URL(request.url),seasonId=asId(url.searchParams.get('seasonId')),divisionId=url.searchParams.get('divisionId')?asId(url.searchParams.get('divisionId')):null,matchday=Math.max(1,Math.min(99,Number(url.searchParams.get('matchday')||1)));if(!seasonId)return fail('Saison fehlt.');
+  const rows=await db.prepare(`SELECT u.id,u.username,p.position,p.avatar_key,c.id club_id,c.name club_name,d.name division_name,
+    COUNT(DISTINCT ps.match_id) matches,COALESCE(SUM(ps.goals),0) goals,COALESCE(SUM(ps.assists),0) assists,COALESCE(SUM(ps.saves),0) saves,COALESCE(SUM(ps.clean_sheet),0) clean_sheets,COALESCE(SUM(ps.motm),0) motm,ROUND(AVG(ps.rating),2) rating
+    FROM player_stats ps JOIN matches m ON m.id=ps.match_id JOIN users u ON u.id=ps.user_id LEFT JOIN profiles p ON p.user_id=u.id JOIN clubs c ON c.id=ps.club_id LEFT JOIN divisions d ON d.id=m.division_id
+    WHERE m.season_id=? AND m.matchday=? AND m.status='CONFIRMED' AND (? IS NULL OR m.division_id=?) GROUP BY u.id,c.id ORDER BY CASE WHEN p.position='TW' THEN COALESCE(SUM(ps.saves),0) ELSE COALESCE(SUM(ps.goals),0)+COALESCE(SUM(ps.assists),0) END DESC,AVG(ps.rating) DESC,u.username`).bind(seasonId,matchday,divisionId,divisionId).all();
+  return json({players:rows.results||[],seasonId,divisionId,matchday});
+}
+
+async function adminTotwAward(request,env){
+  const db=requireDb(env),admin=await requireAdminPermission(request,env,'matches'),b=await request.json(),seasonId=asId(b.seasonId),divisionId=b.divisionId?asId(b.divisionId):null,matchday=Math.max(1,Math.min(99,Number(b.matchday||1))),userId=asId(b.userId),slot=cleanText(b.slotLabel,20)||'TOTW';if(!seasonId||!userId)return fail('Saison und Spieler sind erforderlich.');
+  const user=await db.prepare(`SELECT u.id,u.username,c.division_id FROM users u LEFT JOIN club_members cm ON cm.user_id=u.id AND cm.left_at IS NULL LEFT JOIN clubs c ON c.id=cm.club_id WHERE u.id=? AND u.status='ACTIVE'`).bind(userId).first();if(!user)return fail('Spieler nicht gefunden.',404);if(divisionId&&Number(user.division_id)!==Number(divisionId))return fail('Der Spieler gehört aktuell nicht zu dieser Liga.',409);const divOk=divisionId?await db.prepare(`SELECT id FROM divisions WHERE id=? AND season_id=?`).bind(divisionId,seasonId).first():true;if(!divOk)return fail('Liga gehört nicht zur gewählten Saison.',409);
+  const played=await db.prepare(`SELECT 1 FROM player_stats ps JOIN matches m ON m.id=ps.match_id WHERE ps.user_id=? AND m.season_id=? AND m.matchday=? AND m.status='CONFIRMED' AND (? IS NULL OR m.division_id=?) LIMIT 1`).bind(userId,seasonId,matchday,divisionId,divisionId).first();if(!played)return fail('TOTW kann nur an Spieler vergeben werden, die in einem bestätigten Match dieses Spieltags Statistiken besitzen.',409);
+  const count=await db.prepare(`SELECT COUNT(*) count FROM totw_selections WHERE season_id=? AND COALESCE(division_id,0)=COALESCE(?,0) AND matchday=?`).bind(seasonId,divisionId,matchday).first();if(Number(count?.count||0)>=11)return fail('Für diesen Spieltag wurden bereits 11 TOTW-Spieler ausgewählt.',409);
+  const exists=await db.prepare(`SELECT id FROM totw_selections WHERE season_id=? AND COALESCE(division_id,0)=COALESCE(?,0) AND matchday=? AND user_id=?`).bind(seasonId,divisionId,matchday,userId).first();if(exists)return fail('Dieser Spieler ist bereits im TOTW dieses Spieltags.',409);
+  const txRef=`${seasonId}:${divisionId||0}:${matchday}:${userId}`;await db.batch([db.prepare(`INSERT INTO totw_selections(season_id,division_id,matchday,user_id,slot_label,selected_by,expires_at,coins_awarded) VALUES(?,?,?,?,?,?,datetime('now','+7 days'),250)`).bind(seasonId,divisionId,matchday,userId,slot,admin.id),db.prepare(`INSERT OR IGNORE INTO coin_wallets(user_id,balance) VALUES(?,0)`).bind(userId),db.prepare(`UPDATE coin_wallets SET balance=balance+250,lifetime_earned=lifetime_earned+250,updated_at=datetime('now') WHERE user_id=?`).bind(userId),db.prepare(`INSERT OR IGNORE INTO coin_transactions(user_id,amount,type,reference_type,reference_id,description) VALUES(?,250,'ADMIN_ADJUSTMENT','TOTW',?,'EPL Team of the Week – 250 Coins')`).bind(userId,txRef),db.prepare(`INSERT INTO player_achievements(user_id,title,subtitle,icon_key) VALUES(?,?,?,?)`).bind(userId,'EPL Team of the Week',`Spieltag ${matchday} • ${slot}`,'/assets/totw/SpielerDerWocheRahmen.png')]);await notifyUser(db,userId,'TOTW','Du bist im EPL Team of the Week!',`Du erhältst 250 EPL Coins und kannst den exklusiven TOTW-Profilbildrahmen 7 Tage lang ausrüsten.`,'/spieler/'+user.username.toLowerCase());return json({ok:true,username:user.username,expiresInDays:7,coins:250});
+}
+
 async function eaClubInfo(request,env){const u=new URL(request.url),clubId=(u.searchParams.get('clubId')||'').trim(),platform=(u.searchParams.get('platform')||'common-gen5').trim();if(!/^\d{1,12}$/.test(clubId))return fail('Ungültige EA Club ID.');if(!['common-gen5','common-gen4'].includes(platform))return fail('Ungültige Plattform.');const target=`https://proclubs.ea.com/api/fc/clubs/info?platform=${encodeURIComponent(platform)}&clubIds=${encodeURIComponent(clubId)}`;const res=await fetch(target,{headers:{accept:'application/json','user-agent':'EPL-Elite-Pro-League/1.0'},signal:AbortSignal.timeout(9000)});if(!res.ok)return fail(`EA Clubs antwortet mit HTTP ${res.status}.`,502);const data=await res.json();return json({provider:'EA Clubs',clubId,platform,data});}
 async function getProfile(slug,request,env){
   const db=requireDb(env),viewer=await currentUser(request,env);
@@ -1213,6 +1333,9 @@ async function getProfile(slug,request,env){
     LEFT JOIN club_members cm ON cm.user_id=u.id AND cm.left_at IS NULL LEFT JOIN clubs c ON c.id=cm.club_id
     WHERE lower(u.username)=?`).bind(slug.toLowerCase()).first();
   if(!p)return fail('Spieler nicht gefunden.',404);
+  const activeTotw=await db.prepare(`SELECT id,matchday,slot_label,expires_at FROM totw_selections WHERE user_id=? AND expires_at>datetime('now') ORDER BY expires_at DESC LIMIT 1`).bind(p.id).first();
+  p.totw_frame_active=!!activeTotw;p.totw_frame_expires_at=activeTotw?.expires_at||null;p.totw_matchday=activeTotw?.matchday||null;
+  if(!activeTotw&&Number(p.use_totw_frame)){await db.prepare(`UPDATE profiles SET use_totw_frame=0 WHERE user_id=?`).bind(p.id).run();p.use_totw_frame=0;}
   const likeCount=await db.prepare('SELECT COUNT(*) count FROM profile_likes WHERE target_user_id=?').bind(p.id).first();
   p.profile_likes=likeCount?.count||0;p.viewer_liked=viewer?!!(await db.prepare('SELECT 1 FROM profile_likes WHERE user_id=? AND target_user_id=?').bind(viewer.id,p.id).first()):false;
   const [stats,posts,recentMatches,achievements,clubHistory,badges]=await Promise.all([
@@ -1234,7 +1357,10 @@ async function getProfile(slug,request,env){
   ]);
   let inventory=[];
   if(viewer?.id===p.id){const inv=await db.prepare(`SELECT si.id,si.name,si.category,si.description,si.rarity,si.asset_key,si.price_coins,si.price_eur_cents,ui.acquired_at FROM user_inventory ui JOIN shop_items si ON si.id=ui.item_id WHERE ui.user_id=? ORDER BY ui.acquired_at DESC`).bind(p.id).all();inventory=inv.results||[];}
-  return json({profile:p,stats:stats||{},posts:posts.results||[],recentMatches:recentMatches.results||[],achievements:achievements.results||[],clubHistory:clubHistory.results||[],inventory,badges:badges.results||[]});
+  const [achievementProgress,career,marketRow,trophyRows,marketHistoryRows]=await Promise.all([achievementView(db,p.id),careerForUser(db,p.id),marketRowForUser(db,p.id),db.prepare(`SELECT t.name title,('x'||ut.quantity) subtitle,t.icon_key,ut.awarded_at FROM user_trophies ut JOIN trophies t ON t.id=ut.trophy_id WHERE ut.user_id=? ORDER BY ut.awarded_at DESC`).bind(p.id).all(),db.prepare(`SELECT value_eur,reason,created_at FROM market_value_snapshots WHERE user_id=? ORDER BY id DESC LIMIT 12`).bind(p.id).all()]);
+  const unlockedAuto=achievementProgress.filter(x=>x.unlocked).map(x=>({id:`achievement-${x.id}`,title:x.title,subtitle:x.description,icon_key:x.asset_key,awarded_at:x.unlocked_at,category:x.category}));
+  p.market_value=marketRow?marketValueFromRow(marketRow):250000;
+  return json({profile:p,stats:stats||{},posts:posts.results||[],recentMatches:recentMatches.results||[],achievements:[...(trophyRows.results||[]),...unlockedAuto,...(achievements.results||[])],achievementProgress,career,marketHistory:marketHistoryRows.results||[],clubHistory:clubHistory.results||[],inventory,badges:badges.results||[]});
 }
 async function getClub(slug,request,env){
   const db=requireDb(env),viewer=await currentUser(request,env);
@@ -1291,7 +1417,8 @@ async function getFixtures(env){const db=requireDb(env);const r=await db.prepare
 async function listPlayers(env){
   const db=requireDb(env);
   const r=await db.prepare(`SELECT u.username,lower(u.username) slug,p.position,p.secondary_position,p.country,p.avatar_key,p.overall,
-    CASE WHEN p.last_seen_at>=datetime('now','-7 minutes') THEN 1 ELSE 0 END is_online,p.equipped_avatar_frame_id,p.equipped_name_effect_id,
+    CASE WHEN p.last_seen_at>=datetime('now','-7 minutes') THEN 1 ELSE 0 END is_online,p.equipped_avatar_frame_id,p.equipped_name_effect_id,p.use_totw_frame,
+    EXISTS(SELECT 1 FROM totw_selections tw WHERE tw.user_id=u.id AND tw.expires_at>datetime('now')) totw_frame_active,
     c.id club_id,COALESCE(c.name,'Free Agent') club,c.division_id,d.name division_name,d.level division_level,
     COALESCE((SELECT COUNT(*) FROM player_stats ps WHERE ps.user_id=u.id),0) matches,
     COALESCE((SELECT SUM(ps.goals) FROM player_stats ps WHERE ps.user_id=u.id),0) goals,
@@ -1325,7 +1452,7 @@ async function getBootstrap(env){
   const [news,fixtures,players,clubs,transfers,standings]=await Promise.all([
     db.prepare(`SELECT id,slug,title,excerpt,image_key,published_at FROM news WHERE status='PUBLISHED' ORDER BY COALESCE(published_at,created_at) DESC LIMIT 3`).all(),
     db.prepare(`SELECT m.id,m.scheduled_at,m.status,h.name home_name,h.slug home_slug,a.name away_name,a.slug away_slug,d.name division_name FROM matches m JOIN clubs h ON h.id=m.home_club_id JOIN clubs a ON a.id=m.away_club_id JOIN divisions d ON d.id=m.division_id ORDER BY scheduled_at ASC LIMIT 6`).all(),
-    db.prepare(`SELECT u.username,lower(u.username) slug,p.position,p.country,p.avatar_key,p.equipped_avatar_frame_id,p.equipped_name_effect_id,CASE WHEN p.last_seen_at>=datetime('now','-7 minutes') THEN 1 ELSE 0 END is_online,c.id club_id,COALESCE(c.name,'Free Agent') club,c.division_id,d.name division_name,d.level division_level,COALESCE((SELECT SUM(ps.goals) FROM player_stats ps WHERE ps.user_id=u.id),0) goals,COALESCE((SELECT SUM(ps.assists) FROM player_stats ps WHERE ps.user_id=u.id),0) assists,COALESCE((SELECT COUNT(*) FROM player_stats ps WHERE ps.user_id=u.id),0) matches,COALESCE(ROUND((SELECT AVG(ps.rating) FROM player_stats ps WHERE ps.user_id=u.id),2),COALESCE(p.overall,0)) rating FROM users u LEFT JOIN profiles p ON p.user_id=u.id LEFT JOIN profile_onboarding po ON po.user_id=u.id LEFT JOIN club_members cm ON cm.user_id=u.id AND cm.left_at IS NULL LEFT JOIN clubs c ON c.id=cm.club_id LEFT JOIN divisions d ON d.id=c.division_id WHERE u.status='ACTIVE' AND COALESCE(po.completed,CASE WHEN length(trim(COALESCE(p.ea_id,'')))>0 AND length(trim(COALESCE(p.position,'')))>0 THEN 1 ELSE 0 END)=1 ORDER BY goals DESC,matches DESC LIMIT 6`).all(),
+    db.prepare(`SELECT u.username,lower(u.username) slug,p.position,p.country,p.avatar_key,p.equipped_avatar_frame_id,p.equipped_name_effect_id,p.use_totw_frame,EXISTS(SELECT 1 FROM totw_selections tw WHERE tw.user_id=u.id AND tw.expires_at>datetime('now')) totw_frame_active,CASE WHEN p.last_seen_at>=datetime('now','-7 minutes') THEN 1 ELSE 0 END is_online,c.id club_id,COALESCE(c.name,'Free Agent') club,c.division_id,d.name division_name,d.level division_level,COALESCE((SELECT SUM(ps.goals) FROM player_stats ps WHERE ps.user_id=u.id),0) goals,COALESCE((SELECT SUM(ps.assists) FROM player_stats ps WHERE ps.user_id=u.id),0) assists,COALESCE((SELECT COUNT(*) FROM player_stats ps WHERE ps.user_id=u.id),0) matches,COALESCE(ROUND((SELECT AVG(ps.rating) FROM player_stats ps WHERE ps.user_id=u.id),2),COALESCE(p.overall,0)) rating FROM users u LEFT JOIN profiles p ON p.user_id=u.id LEFT JOIN profile_onboarding po ON po.user_id=u.id LEFT JOIN club_members cm ON cm.user_id=u.id AND cm.left_at IS NULL LEFT JOIN clubs c ON c.id=cm.club_id LEFT JOIN divisions d ON d.id=c.division_id WHERE u.status='ACTIVE' AND COALESCE(po.completed,CASE WHEN length(trim(COALESCE(p.ea_id,'')))>0 AND length(trim(COALESCE(p.position,'')))>0 THEN 1 ELSE 0 END)=1 ORDER BY goals DESC,matches DESC LIMIT 6`).all(),
     db.prepare(`SELECT c.name,c.slug,c.logo_key,c.reputation,c.followers_count,COALESCE(d.name,'Ohne Division') division,u.username manager FROM clubs c LEFT JOIN divisions d ON d.id=c.division_id LEFT JOIN users u ON u.id=c.manager_user_id ORDER BY c.created_at DESC LIMIT 8`).all(),
     db.prepare(`SELECT t.id,t.type,t.occurred_at AS created_at,u.username player,p.position,p.overall rating,fc.name from_club,tc.name to_club FROM transfers t LEFT JOIN users u ON u.id=t.user_id LEFT JOIN profiles p ON p.user_id=t.user_id LEFT JOIN clubs fc ON fc.id=t.from_club_id LEFT JOIN clubs tc ON tc.id=t.to_club_id ORDER BY t.occurred_at DESC LIMIT 6`).all(),
     db.prepare(`WITH stats AS (SELECT sc.club_id,COUNT(m.id) played,SUM(CASE WHEN (m.home_club_id=sc.club_id AND m.home_score>m.away_score) OR (m.away_club_id=sc.club_id AND m.away_score>m.home_score) THEN 1 ELSE 0 END) wins,SUM(CASE WHEN m.home_score=m.away_score THEN 1 ELSE 0 END) draws,SUM(CASE WHEN (m.home_club_id=sc.club_id AND m.home_score<m.away_score) OR (m.away_club_id=sc.club_id AND m.away_score<m.home_score) THEN 1 ELSE 0 END) losses,SUM(CASE WHEN m.home_club_id=sc.club_id THEN m.home_score ELSE m.away_score END) gf,SUM(CASE WHEN m.home_club_id=sc.club_id THEN m.away_score ELSE m.home_score END) ga FROM season_clubs sc LEFT JOIN matches m ON m.season_id=sc.season_id AND (m.home_club_id=sc.club_id OR m.away_club_id=sc.club_id) AND m.status='CONFIRMED' WHERE sc.season_id=1 GROUP BY sc.club_id) SELECT c.id,c.name,c.slug,COALESCE(s.played,0) played,COALESCE(s.wins,0) wins,COALESCE(s.draws,0) draws,COALESCE(s.losses,0) losses,COALESCE(s.gf,0) gf,COALESCE(s.ga,0) ga,(COALESCE(s.wins,0)*3+COALESCE(s.draws,0)) points FROM clubs c JOIN season_clubs sc ON sc.club_id=c.id AND sc.season_id=1 LEFT JOIN stats s ON s.club_id=c.id ORDER BY points DESC,(gf-ga) DESC,gf DESC LIMIT 6`).all()

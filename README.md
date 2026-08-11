@@ -123,3 +123,7 @@ Eine Schritt-für-Schritt-Anleitung liegt in [`OAUTH-SETUP-DE.md`](./OAUTH-SETUP
 
 ## Social / Cosmetics Update (0005)
 Für Online-Status, Shop-Inventar-Ausrüstung, Social Feed, Reaktionen, Kommentare und Antworten muss nach `0004_admin_rbac.sql` zusätzlich `migrations/0005_social_inventory_presence.sql` einmalig auf der Remote-D1-Datenbank ausgeführt werden. Details stehen in `SOCIAL-SHOP-UPDATE-DE.md`.
+
+## EPL v10
+
+Neu: manuelles Team of the Week mit 7-Tage-TOTW-Rahmen und 250 Coins, Karrierehistorie, EPL-Marktwerte ohne Altersfaktor, Achievement-Center mit EPL-Assets und persönlicher Daily Hub. Installation: ausschließlich `migrations/0013_totw_career_market_achievements_hub.sql` zusätzlich ausführen. Details siehe `V10-TOTW-KARRIERE-MARKTWERTE-ACHIEVEMENTS-HUB-DE.md`.
