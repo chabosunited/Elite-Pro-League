@@ -478,3 +478,101 @@
 /* EPL v10 additions: manual TOTW candidate review + Daily Hub club standing */
 .totw-candidate-panel{margin-top:13px;padding:12px}.totw-candidate-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;max-height:360px;overflow:auto}.totw-candidate-card{display:grid;grid-template-columns:52px minmax(0,1fr);gap:10px;align-items:center;text-align:left;border:1px solid #20364f;background:#06111e;color:#fff;border-radius:9px;padding:8px;min-width:0}.totw-candidate-card:hover,.totw-candidate-card.selected{border-color:#30b6ff;background:#081a2b;box-shadow:inset 0 0 20px rgba(24,157,255,.08)}.totw-candidate-card img{width:50px;height:50px;border-radius:7px;object-fit:cover}.totw-candidate-card b,.totw-candidate-card small,.totw-candidate-card span{display:block;min-width:0}.totw-candidate-card b{font-size:11px}.totw-candidate-card small{font-size:8px;color:#35b7ff;margin-top:2px}.totw-candidate-card span{font-size:8px;color:#93a2b2;margin-top:4px;line-height:1.35}.daily-standing small{color:#35b7ff;font-size:9px}.daily-standing h2{font-family:Rajdhani;font-size:24px;margin:4px 0}.daily-standing>strong{font-family:Rajdhani;font-size:27px;color:#fff}.daily-standing>strong em{font-size:13px;color:#8796a7;font-style:normal}.daily-standing-stats{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin:10px 0}.daily-standing-stats span{border:1px solid #1c3048;background:#06111d;border-radius:7px;padding:7px;text-align:center;font-size:8px;color:#8494a5}.daily-standing-stats b{display:block;font-family:Rajdhani;font-size:17px;color:#37b9ff}
 @media(max-width:760px){.totw-candidate-grid{grid-template-columns:1fr}.daily-standing-stats{grid-template-columns:repeat(2,1fr)}}
+
+/* ===== EPL v11 – Mobile social profile, focused home feed, messenger stability & navigation polish ===== */
+.mobile-market-card{display:none}
+
+/* Logged-in home is now a real feed canvas below the slider. */
+.home-social-v11{padding-top:18px;padding-bottom:34px}
+.home-social-v11 .social-feed-head{max-width:1180px;margin:0 auto 12px}
+.home-social-v11 .home-social-grid{max-width:1180px;margin:0 auto;grid-template-columns:minmax(0,1fr) 285px}
+.home-social-v11 .social-feed-stream{min-width:0}
+.home-social-v11 .social-post{border-radius:12px}
+
+/* Modern hamburger button. */
+.mobile-toggle{font-size:0!important}
+.mobile-toggle:after{content:none!important}
+.mobile-toggle .ui-svg-icon{width:24px;height:24px}
+.mobile-toggle .ui-svg-icon svg{width:24px;height:24px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+
+/* Drawer items use proper icons instead of a text-only menu. */
+.mobile-drawer-head{display:flex;align-items:center;justify-content:space-between;padding:8px 9px 11px;border-bottom:1px solid #17304a;margin-bottom:3px}
+.mobile-drawer-head small,.mobile-drawer-head strong{display:block}.mobile-drawer-head small{font-size:8px;letter-spacing:.13em;color:#35b7ff}.mobile-drawer-head strong{font-family:Rajdhani,Inter,sans-serif;font-size:19px}
+.mobile-drawer-head button{width:36px;height:36px;border-radius:10px;border:1px solid #25415f;background:#081624;color:#fff;display:grid;place-items:center}
+.mobile-drawer-link,.mobile-drawer-logout{display:flex!important;align-items:center;gap:12px;width:100%;min-height:48px;padding:11px 12px!important;border:0!important;border-bottom:1px solid #14273b!important;background:transparent;color:#edf4fb;text-align:left;font-weight:700}
+.mobile-drawer-link .ui-svg-icon,.mobile-drawer-logout .ui-svg-icon{width:21px;height:21px;flex:0 0 21px;color:#31b4ff}
+.mobile-drawer-link .ui-svg-icon svg,.mobile-drawer-logout .ui-svg-icon svg{width:100%;height:100%;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+.mobile-drawer-link span,.mobile-drawer-logout span{flex:1}.mobile-drawer-link:hover{background:#0b1b2d}
+.mobile-drawer-separator{height:8px;background:#030914;border-top:1px solid #13263a;border-bottom:1px solid #13263a;margin:3px -4px}
+.mobile-drawer-logout{color:#ff7d89!important;border-bottom:0!important;cursor:pointer}.mobile-drawer-logout .ui-svg-icon{color:#ff6676}
+.drawer-badge{min-width:22px;height:22px;padding:0 6px;border-radius:999px;background:#0b8eff;color:#fff;display:grid;place-items:center;font-size:9px}
+
+/* Messenger: polling only updates the message stream, never the draft composer. */
+.chat-header{min-height:68px}
+.chat-back-button{display:flex;align-items:center;gap:6px;border:1px solid #253b55;background:#07111e;color:#b9c9d9;border-radius:8px;padding:7px 9px;margin-right:2px;font-size:10px;font-weight:800}
+.chat-back-button:hover{border-color:#2caeff;color:#fff}
+.chat-back-button .ui-svg-icon{width:17px;height:17px}.chat-back-button .ui-svg-icon svg{width:100%;height:100%;fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round}
+.chat-user-copy{min-width:0}.chat-user-copy strong,.chat-user-copy small{display:block}
+.empty-chat-icon .ui-svg-icon{width:48px;height:48px;color:#2eb3ff}.empty-chat-icon svg{width:100%;height:100%;fill:none;stroke:currentColor;stroke-width:1.3}
+
+@media(max-width:760px){
+  /* Mobile profile follows a social-network profile hierarchy. */
+  .ref-player-hero{height:auto!important;min-height:0!important;margin:0!important;padding:0 0 13px!important;overflow:visible!important;background:#030914!important;border-bottom:1px solid #1b3047!important}
+  .ref-player-cover,.equipped-cover-frame{position:absolute!important;inset:0 0 auto 0!important;width:100%!important;height:172px!important;object-fit:cover!important;margin:0!important}
+  .equipped-cover-frame{object-fit:fill!important}
+  .ref-player-hero:after{height:172px!important;bottom:auto!important;background:linear-gradient(180deg,rgba(2,7,16,.08),rgba(2,7,16,.52))!important}
+  .ref-player-hero-inner{display:block!important;height:auto!important;padding:116px 14px 0!important;position:relative!important}
+  .ref-avatar.square-avatar{width:112px!important;height:112px!important;margin:0 0 9px!important;border-radius:13px!important;background:#06111e!important;box-shadow:0 8px 24px rgba(0,0,0,.44)!important}
+  .ref-avatar.square-avatar>.avatar-base{border-radius:10px!important}
+  .ref-avatar.square-avatar>.presence-dot{right:-5px!important;bottom:-5px!important;width:20px!important;height:20px!important;border-width:3px!important}
+  .ref-player-copy{margin:0!important;padding:0!important;max-width:none!important;width:100%!important}
+  .profile-name-row{display:flex;align-items:center;gap:7px;min-width:0}
+  .ref-player-copy h1{font-size:30px!important;line-height:1!important;margin:0 0 5px!important;white-space:normal!important;overflow-wrap:anywhere}
+  .ref-subtitle{font-size:12px!important;line-height:1.4!important;color:#d2dce7!important}
+  .ref-player-copy p{font-size:11px!important;line-height:1.45!important;margin:7px 0 10px!important;color:#9fadb9!important}
+  .ref-player-copy>.profile-market-pill{display:none!important}
+  .profile-badge-strip{margin:7px 0!important;max-width:100%;overflow-x:auto;display:flex!important;flex-wrap:nowrap!important}
+  .profile-actions{display:flex!important;overflow-x:auto!important;gap:7px!important;margin:0 -2px;padding:2px 2px 7px!important;scrollbar-width:none}
+  .profile-actions::-webkit-scrollbar{display:none}.profile-actions .btn{min-height:38px!important;padding:8px 11px!important;border-radius:8px!important;font-size:9px!important;white-space:nowrap!important}
+  .ref-profile-wrap{padding:0!important;width:100%!important}
+  .ref-profile-statbar{display:grid!important;grid-template-columns:repeat(4,minmax(0,1fr))!important;gap:0!important;padding:0!important;margin:0!important;border-left:0!important;border-right:0!important;border-radius:0!important;overflow:visible!important;background:#050e19!important}
+  .ref-profile-statbar .ref-rank{display:none!important}
+  .ref-profile-statbar>div{min-width:0!important;height:62px!important;padding:8px 3px!important;border-right:1px solid #172b41!important;border-bottom:1px solid #172b41!important}
+  .ref-profile-statbar>div:nth-child(4n){border-right:0!important}.ref-profile-statbar strong{font-size:19px!important}.ref-profile-statbar span{font-size:7px!important}
+  .mobile-market-card{display:grid!important;grid-template-columns:1fr auto;align-items:center;gap:3px 10px;margin:9px 10px 0;padding:11px 13px;border-radius:10px;background:linear-gradient(135deg,#071523,#081b2d);border-color:#244766}
+  .mobile-market-card span{font-size:8px;color:#39b8ff;letter-spacing:.08em}.mobile-market-card strong{font-family:Rajdhani;font-size:22px;text-align:right}.mobile-market-card small{grid-column:1/-1;color:#8394a5;font-size:8px}
+  .ref-tabs{position:sticky!important;top:62px!important;z-index:28!important;margin:9px 0 0!important;padding:0 8px!important;background:#030914f2!important;backdrop-filter:blur(12px);height:48px!important;gap:3px!important;border-bottom:1px solid #1a2c41!important}
+  .ref-tabs .tab-btn{font-size:9px!important;padding:13px 10px 11px!important}
+  .profile-tab-panel{padding:10px!important}
+  .ref-profile-grid{grid-template-columns:1fr!important;gap:10px!important;padding:0 0 78px!important}
+  .ref-feed-column{order:1}.ref-center-column{order:2}.ref-side-column{order:3}
+  .social-composer,.social-post,.ref-match-card,.ref-side-box,.ref-empty-card{border-radius:11px!important}
+  .social-post{padding:11px!important}.social-post-body{font-size:12px!important;line-height:1.5!important}
+  .social-post-media{width:100%!important;height:auto!important;max-height:none!important;object-fit:contain!important;border-radius:9px!important}
+
+  /* Mobile drawer occupies a clean app sheet under the compact header. */
+  .mobile-drawer.open{display:block!important;left:8px!important;right:8px!important;top:68px!important;max-height:calc(100vh - 148px)!important;overflow:auto!important;padding:6px!important;border-radius:15px!important;background:rgba(5,14,25,.985)!important;box-shadow:0 24px 70px rgba(0,0,0,.72)!important}
+
+  /* Home: slider + feed only for authenticated users; feed looks like an app timeline. */
+  .home-social-v11{padding:12px 9px 78px!important;width:100%!important}
+  .home-social-v11 .social-feed-head{margin:0 2px 10px!important;align-items:center!important}.home-social-v11 .social-feed-head h2{font-size:24px!important;margin:2px 0!important}.home-social-v11 .social-feed-head p{font-size:9px!important}.home-social-v11 .social-feed-head .btn{font-size:8px!important;padding:8px!important;min-width:0!important}
+  .home-social-v11 .home-social-grid{display:block!important;max-width:none!important}.home-social-v11 .social-feed-side{display:none!important}.home-social-v11 .social-feed-stream{display:grid!important;gap:9px!important}
+
+  /* Messenger behaves like a mobile chat app. */
+  .messenger-heading{display:none!important}.messenger-page{width:100%!important;padding:0!important}.messenger-shell{display:grid!important;grid-template-columns:1fr!important;min-height:calc(100dvh - 128px)!important;border:0!important;border-radius:0!important;background:#040b13!important}
+  .messenger-list{display:block!important;max-height:none!important;height:calc(100dvh - 128px)!important;border:0!important;overflow-y:auto!important;padding-bottom:76px!important}.messenger-chat{display:none!important;min-height:calc(100dvh - 128px)!important;height:calc(100dvh - 128px)!important}
+  .messenger-shell.conversation-open .messenger-list{display:none!important}.messenger-shell.conversation-open .messenger-chat{display:grid!important;grid-template-rows:auto minmax(0,1fr) auto!important}
+  .empty-chat{display:none!important}.chat-header{padding:9px 10px!important;min-height:62px!important;position:sticky;top:0;z-index:5}.chat-back-button span{display:none}.chat-back-button{width:36px;height:36px;padding:0!important;display:grid!important;place-items:center!important;border-radius:50%!important}
+  .chat-header .conversation-avatar{width:40px!important;height:40px!important;flex-basis:40px!important}.chat-user-copy strong{font-size:13px!important}.chat-user-copy small{font-size:8px!important}
+  .chat-messages{max-height:none!important;height:auto!important;min-height:0!important;padding:12px 10px 18px!important;overflow-y:auto!important}.chat-bubble{max-width:84%!important;padding:9px 10px!important}.chat-bubble p{font-size:12px!important}
+  .chat-compose{position:sticky!important;bottom:64px!important;grid-template-columns:minmax(0,1fr) auto!important;gap:6px!important;padding:8px!important;background:#07111d!important;z-index:6}.chat-compose textarea{min-width:0!important;min-height:42px!important;font-size:12px!important;padding:10px!important}.chat-compose .btn{min-width:62px!important;padding:8px 9px!important;font-size:9px!important}
+}
+
+@media(max-width:390px){
+  .ref-player-hero-inner{padding-left:11px!important;padding-right:11px!important}.ref-avatar.square-avatar{width:104px!important;height:104px!important}.ref-player-copy h1{font-size:28px!important}.ref-profile-statbar strong{font-size:17px!important}.ref-profile-statbar span{font-size:6.5px!important}
+}
+@media(max-width:760px){
+  .profile-actions{display:grid!important;grid-template-columns:repeat(3,minmax(0,1fr))!important;overflow:visible!important;gap:6px!important;padding:2px 0 7px!important}
+  .profile-actions .btn,.profile-actions a.btn{width:100%!important;min-width:0!important;display:flex!important;align-items:center!important;justify-content:center!important;text-align:center!important;white-space:normal!important;line-height:1.15!important}
+}
+@media(max-width:370px){.profile-actions{grid-template-columns:repeat(2,minmax(0,1fr))!important}}

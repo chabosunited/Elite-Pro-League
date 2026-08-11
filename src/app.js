@@ -57,7 +57,18 @@ function mobileIcon(name){
     bell:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 9a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4"/></svg>',
     profile:'<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4.5 21c.8-4.8 3.2-7.2 7.5-7.2s6.7 2.4 7.5 7.2"/></svg>',
     edit:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16z"/><path d="m13.5 6.5 4 4"/></svg>',
-    logout:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 4H4v16h6M14 8l4 4-4 4M8 12h10"/></svg>'
+    logout:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 4H4v16h6M14 8l4 4-4 4M8 12h10"/></svg>',
+    menu:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 7h14M5 12h14M5 17h14"/></svg>',
+    close:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg>',
+    back:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 5-7 7 7 7M8 12h11"/></svg>',
+    news:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h12v16H5zM17 7h2a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2h-2M8 8h6M8 12h6M8 16h4"/></svg>',
+    table:'<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18M9 9v11M15 9v11"/></svg>',
+    transfers:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7h11l-3-3M18 7l-3 3M17 17H6l3 3M6 17l3-3"/></svg>',
+    shop:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9h16l-1 11H5zM7 9a5 5 0 0 1 10 0"/></svg>',
+    rules:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h12a2 2 0 0 1 2 2v16H6a3 3 0 0 1-3-3V6a3 3 0 0 1 3-3zM6 3v18M9 8h7M9 12h7M9 16h5"/></svg>',
+    hub:'<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>',
+    admin:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 4 6v5c0 5 3.4 8.6 8 10 4.6-1.4 8-5 8-10V6z"/><path d="M9 12l2 2 4-5"/></svg>',
+    manager:'<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3"/><path d="M3 20c.5-4 2.5-6 6-6 2.1 0 3.7.7 4.7 2M17 13l1.2 1.2 2.3-2.7M15 20h6v-5h-6z"/></svg>'
   };return `<span class="ui-svg-icon">${icons[name]||icons.home}</span>`;
 }
 
@@ -162,7 +173,7 @@ function layout(content){
     <header class="site-header"><div class="container header-inner">
       <a href="/" data-link class="brand"><img src="${demo.brand.logo}" alt="${esc(demo.brand.name)}"></a>
       <nav class="nav">${nav.map(([h,l])=>`<a data-link class="nav-link ${navActive(h)?'active':''}" href="${h}">${l}</a>`).join('')}</nav>
-      <button class="mobile-toggle" id="mobileMenu">☰</button>
+      <button class="mobile-toggle" id="mobileMenu" aria-label="Menü öffnen">${mobileIcon('menu')}</button>
       <div class="header-actions">${state.me?`${state.me.managed_club_slug?'<a class="login-link control-link" data-link href="/manager">VM PANEL</a>':''}${state.me.is_admin||state.me.role==='SUPER_ADMIN'?'<a class="login-link control-link" data-link href="/admin">ADMIN</a>':''}${fullEditor?`<button class="header-icon-action edit-mode-toggle ${state.editMode?'active':''}" data-edit-mode-toggle title="${state.editMode?'Edit Mode beenden':'Edit Mode starten'}">${mobileIcon('edit')}<small>EDIT</small></button>`:''}<a class="header-icon-action notification-link" data-link href="/benachrichtigungen" title="Benachrichtigungen">${mobileIcon('bell')}<b class="notification-badge" data-notification-badge ${state.notificationUnread?'':'hidden'}>${fmt(state.notificationUnread)}</b></a><a class="header-icon-action" data-link href="/nachrichten" title="Nachrichten">${mobileIcon('chat')}</a><a class="header-profile-action" data-link href="/spieler/${esc(state.me.username.toLowerCase())}" title="Profil">${mobileIcon('profile')}<small>${esc(state.me.username)}</small></a><button class="btn btn-primary logout-compact" data-action="logout">ABMELDEN</button>`:`<a class="btn btn-primary" data-link href="/registrieren">♙ REGISTRIEREN</a><a class="login-link" data-link href="/login">👤 Login</a>`}</div>
     </div></header>${mobileDrawer()}
     ${state.editMode?'<div class="edit-mode-banner"><b>EDIT MODE</b><span>Klicke auf markierte Texte/Bilder, um sie direkt zu bearbeiten.</span><button data-edit-mode-toggle>BEENDEN</button></div>':''}
@@ -172,8 +183,16 @@ function footer(){const socials=[['discord','Discord','#'],['x','X','#'],['insta
 
 
 function mobileDrawer(){
-  if(!state.me)return `<div class="mobile-drawer" id="mobileDrawer"><a data-link href="/news">News</a><a data-link href="/tabelle">Tabelle</a><a data-link href="/transfers">Transfers</a><a data-link href="/shop">Shop</a><a data-link href="/regeln">Regeln</a><a data-link href="/login">Login</a></div>`;
-  return `<div class="mobile-drawer" id="mobileDrawer"><a data-link href="/news">News</a><a data-link href="/tabelle">Tabelle</a><a data-link href="/transfers">Transfers</a><a data-link href="/shop">Shop</a><a data-link href="/regeln">Regeln</a><a data-link href="/hub">Mein Daily Hub</a><a data-link href="/erfolge">Achievements</a><a data-link href="/marktwerte">Marktwerte</a><a data-link href="/spieler/${esc(state.me.username.toLowerCase())}">Mein Profil</a><a data-link href="/benachrichtigungen">Benachrichtigungen${state.notificationUnread?` (${fmt(state.notificationUnread)})`:''}</a><a data-link href="/nachrichten">Nachrichten</a>${state.me.managed_club_slug?'<a class="control-link" data-link href="/manager">VM Panel</a>':''}${state.me.is_admin||state.me.role==='SUPER_ADMIN'?'<a class="control-link" data-link href="/admin">Admin</a>':''}<button class="btn btn-primary" data-action="logout">Abmelden</button></div>`;
+  const link=(href,icon,label,extra='')=>`<a data-link href="${href}" class="mobile-drawer-link">${mobileIcon(icon)}<span>${label}</span>${extra}</a>`;
+  const head=`<div class="mobile-drawer-head"><div><small>EPL</small><strong>Navigation</strong></div><button type="button" data-mobile-close aria-label="Menü schließen">${mobileIcon('close')}</button></div>`;
+  if(!state.me)return `<div class="mobile-drawer" id="mobileDrawer">${head}${link('/news','news','News')}${link('/tabelle','table','Tabelle')}${link('/transfers','transfers','Transfers')}${link('/shop','shop','Shop')}${link('/regeln','rules','Regeln')}${link('/login','profile','Login')}</div>`;
+  return `<div class="mobile-drawer" id="mobileDrawer">${head}
+    ${link('/news','news','News')}${link('/tabelle','table','Tabelle')}${link('/transfers','transfers','Transfers')}${link('/shop','shop','Shop')}${link('/regeln','rules','Regeln')}
+    <div class="mobile-drawer-separator"></div>
+    ${link('/hub','hub','Mein Daily Hub')}${link(`/spieler/${esc(state.me.username.toLowerCase())}`,'profile','Mein Profil')}${link('/benachrichtigungen','bell','Benachrichtigungen',state.notificationUnread?`<b class="drawer-badge">${fmt(state.notificationUnread)}</b>`:'')}${link('/nachrichten','chat','Nachrichten')}
+    ${state.me.managed_club_slug?link('/manager','manager','VM Panel'):''}${state.me.is_admin||state.me.role==='SUPER_ADMIN'?link('/admin','admin','Admin'):''}
+    <button class="mobile-drawer-logout" data-action="logout">${mobileIcon('logout')}<span>Abmelden</span></button>
+  </div>`;
 }
 
 function mobileBottomNav(){
@@ -200,6 +219,7 @@ function route(){
 function bindGlobal(){
   document.querySelector('[data-action="logout"]')?.addEventListener('click',async()=>{try{await api('/api/auth/logout',{method:'POST',body:'{}'})}catch{} state.me=null; toast('Du bist abgemeldet.'); goto('/');});
   document.querySelector('#mobileMenu')?.addEventListener('click',()=>document.querySelector('#mobileDrawer')?.classList.toggle('open'));
+  document.querySelector('[data-mobile-close]')?.addEventListener('click',()=>document.querySelector('#mobileDrawer')?.classList.remove('open'));
   document.querySelectorAll('[data-edit-mode-toggle]').forEach(b=>b.addEventListener('click',()=>{state.editMode=!state.editMode;sessionStorage.setItem('epl_edit_mode',state.editMode?'1':'0');route();}));
 }
 
@@ -229,7 +249,7 @@ function socialPostCard(post,{compact=false}={}){
 function renderHomeSocialFeed(){
   if(!state.me)return '';
   const cards=state.socialFeed.length?state.socialFeed.map(p=>socialPostCard(p)).join(''):`<div class="panel social-feed-empty">${emptyCard('Dein Feed ist noch leer','Folge Spielern oder Clubs. Deren neue Beiträge erscheinen danach automatisch hier.')}</div>`;
-  return `<section class="container home-social"><div class="social-feed-head"><div><div class="eyebrow">DEIN NETZWERK</div><h2>Community Feed</h2><p>Neueste Beiträge von Spielern und Clubs, denen du folgst.</p></div><a class="btn btn-ghost" data-link href="/spieler">SPIELER ENTDECKEN</a></div><div class="home-social-grid"><div class="social-feed-stream">${cards}</div><aside class="panel social-feed-side"><div class="panel-title">EPL SOCIAL</div><p>Folge Spielern und Teams, reagiere auf Beiträge, kommentiere und antworte direkt in deinem persönlichen Feed.</p><div class="social-side-stat"><strong>${fmt([...state.following].filter(x=>x.startsWith('player:')).length)}</strong><span>Spieler gefolgt</span></div><div class="social-side-stat"><strong>${fmt([...state.following].filter(x=>x.startsWith('club:')).length)}</strong><span>Clubs gefolgt</span></div></aside></div></section>`;
+  return `<section class="container home-social home-social-v11"><div class="social-feed-head"><div><div class="eyebrow">DEIN NETZWERK</div><h2>Dein EPL Feed</h2><p>Beiträge von Spielern und Clubs, denen du folgst – chronologisch in deinem persönlichen Feed.</p></div><a class="btn btn-ghost" data-link href="/spieler">SPIELER ENTDECKEN</a></div><div class="home-social-grid"><div class="social-feed-stream">${cards}</div><aside class="panel social-feed-side"><div class="panel-title">EPL SOCIAL</div><p>Folge Spielern und Teams, reagiere auf Beiträge, kommentiere und antworte direkt in deinem persönlichen Feed.</p><div class="social-side-stat"><strong>${fmt([...state.following].filter(x=>x.startsWith('player:')).length)}</strong><span>Spieler gefolgt</span></div><div class="social-side-stat"><strong>${fmt([...state.following].filter(x=>x.startsWith('club:')).length)}</strong><span>Clubs gefolgt</span></div></aside></div></section>`;
 }
 function renderHome(){
   const homeMeta=pageMeta('home',{eyebrow:'Willkommen',title:'Willkommen bei der Elite Pro League',subtitle:'Die Elite Pro League ist die kompetitive Online Pro-Clubs-Liga für ambitionierte Spieler, starke Teams und echte Fußball-Esports-Action.'});
@@ -254,7 +274,8 @@ function renderHome(){
     <section class="panel home-card"><div class="section-head"><span class="panel-title">Top-Scorer</span><a data-link href="/spieler" class="section-link">Alle Statistiken ›</a></div>${scorers.length?scorers.map((p,i)=>`<div class="scorer"><span>${i+1}.</span><span class="mini-avatar-wrap"><img src="${avatarFor(p)}" alt="">${onlineDot(p.is_online)}</span><div><div class="name">${esc(p.username)}</div><div class="club">${esc(clubName(p))}</div></div><div class="goals">${fmt(p.goals)}<small style="display:block;font-size:8px;color:#a7b2bf">TORE</small></div></div>`).join(''):emptyCard('Noch keine Spielerstatistiken vorhanden.','Sobald Spieler registriert und Matchdaten gepflegt werden, erscheint hier die Scorerliste.')}</section>
     ${!state.me?`<section class="panel home-card"><div class="panel-title">Warum EPL?</div>${demo.featureIcons.map((x,i)=>{const n=i+1,title=cmsText('home',`why_title_${n}`,x.title),text=cmsText('home',`why_text_${n}`,x.text);return `<div class="feature-row"><div class="feature-icon img"><img src="${x.image}" alt="${esc(title)}"></div><div><strong>${esc(title)}</strong><p>${esc(text)}</p></div></div>`}).join('')}</section>`:''}
   </div></div>`;
-  return `${hero}${welcome}${cards}${state.me?'':renderCmsBlocks('home')}${renderHomeSocialFeed()}`;
+  if(state.me)return `${hero}${renderHomeSocialFeed()}`;
+  return `${hero}${welcome}${cards}${renderCmsBlocks('home')}`;
 }
 
 function renderPlayerProfileShell(slug){
@@ -317,7 +338,7 @@ function renderPlayerProfile(data, slug){
     </div>
   </section>
   <div class="container ref-profile-wrap">
-    <section class="panel ref-profile-statbar"><div class="ref-rank">🏆 <span>EPL PRO</span></div><div><strong>${fmt(p.followers)}</strong><span>Follower</span></div><div><strong>${fmt(p.following)}</strong><span>Folge ich</span></div><div><strong>${fmt(p.profile_likes||0)}</strong><span>Likes</span></div>${headlineStats.map(x=>`<div><strong>${fmt(x[1])}</strong><span>${esc(x[0])}</span></div>`).join('')}<div class="ref-rating"><strong>${Number(stats.rating||0).toFixed(2)}</strong><span>Rating</span></div></section>
+    <section class="panel ref-profile-statbar"><div class="ref-rank">🏆 <span>EPL PRO</span></div><div><strong>${fmt(p.followers)}</strong><span>Follower</span></div><div><strong>${fmt(p.following)}</strong><span>Folge ich</span></div><div><strong>${fmt(p.profile_likes||0)}</strong><span>Likes</span></div>${headlineStats.map(x=>`<div><strong>${fmt(x[1])}</strong><span>${esc(x[0])}</span></div>`).join('')}<div class="ref-rating"><strong>${Number(stats.rating||0).toFixed(2)}</strong><span>Rating</span></div></section><a class="panel mobile-market-card" data-link href="/marktwerte"><span>EPL MARKTWERT</span><strong>${marketEuro(p.market_value)}</strong><small>Ranking & Marktwertverlauf ansehen →</small></a>
     <div class="ref-tabs">${tabs.map(([key,label],i)=>`<button class="tab-btn ${i===0?'active':''}" data-profile-tab="${key}">${label}</button>`).join('')}</div>
 
     <section data-profile-panel="posts" class="profile-tab-panel active"><div class="ref-profile-grid"><section class="ref-feed-column">${own?postComposer({avatar:avatarFor(p),name:p.username}):''}${postCards}</section><section class="ref-center-column">${matchCards}</section><aside class="ref-side-column"><section class="panel ref-side-box"><div class="ref-box-title"><span>SAISON STATISTIKEN</span></div><div class="ref-season-grid">${seasonGrid}</div></section><section class="panel ref-side-box"><div class="ref-box-title"><span>TROPHÄEN & BADGES</span></div>${badgeStrip||''}<div class="ref-trophy-grid">${achievementCards}</div></section><section class="panel ref-side-box"><div class="ref-box-title"><span>ATTRIBUTE</span><b>GES ${fmt(p.overall)}</b></div><div class="ref-attrs">${attrs.map(([k,v])=>`<div><span>${k}</span><i><em style="width:${Math.max(0,Math.min(100,Number(v||0)))}%"></em></i><strong>${fmt(v)}</strong></div>`).join('')}</div></section></aside></div></section>
@@ -446,27 +467,44 @@ function renderMessages(){
 function renderConversationList(list,activeId){
   return `<aside class="messenger-list"><div class="messenger-list-title">NACHRICHTEN</div>${list.length?list.map(c=>`<button class="conversation-row ${Number(activeId)===Number(c.id)?'active':''}" data-conversation-id="${c.id}"><span class="conversation-avatar"><img src="${avatarFor(c)}">${onlineDot(c.is_online)}</span><span><strong>${esc(c.username)}</strong><small>${esc(c.last_message||'Noch keine Nachricht')}</small></span>${Number(c.unread)?`<b>${fmt(c.unread)}</b>`:''}</button>`).join(''):`<div class="messenger-empty">Noch keine Unterhaltungen.<br>Öffne ein Spieler- oder Teamprofil und klicke auf „Nachricht“.</div>`}</aside>`;
 }
-function renderConversationPane(conv){
-  if(!conv)return `<section class="messenger-chat empty-chat"><div>💬</div><h2>Wähle eine Unterhaltung</h2><p>Starte Chats direkt über Spieler- oder Teamprofile.</p></section>`;
-  const other=conv.conversation.other,msgs=conv.messages||[];
-  return `<section class="messenger-chat"><header class="chat-header"><span class="conversation-avatar"><img src="${avatarFor(other)}">${onlineDot(other.is_online)}</span><div><strong>${esc(other.username)}</strong><small class="${Number(other.is_online)?'green':'muted'}">${Number(other.is_online)?'Online':'Offline'}</small></div></header><div class="chat-messages" data-chat-messages>${msgs.length?msgs.map(m=>`<div class="chat-bubble ${Number(m.sender_user_id)===Number(state.me.id)?'mine':'theirs'}"><p>${esc(m.body).replace(/\n/g,'<br>')}</p><small>${formatDateTime(m.created_at)}${Number(m.sender_user_id)===Number(state.me.id)&&m.read_at?' • Gelesen':''}</small></div>`).join(''):`<div class="chat-first">Noch keine Nachrichten. Schreib die erste Nachricht.</div>`}</div><form class="chat-compose" data-chat-form="${conv.conversation.id}"><textarea name="body" rows="1" maxlength="3000" placeholder="Nachricht schreiben…" required></textarea><button class="btn btn-primary">SENDEN</button></form></section>`;
+function renderMessageBubbles(conv){
+  const msgs=conv?.messages||[];
+  return msgs.length?msgs.map(m=>`<div class="chat-bubble ${Number(m.sender_user_id)===Number(state.me.id)?'mine':'theirs'}"><p>${esc(m.body).replace(/\n/g,'<br>')}</p><small>${formatDateTime(m.created_at)}${Number(m.sender_user_id)===Number(state.me.id)&&m.read_at?' • Gelesen':''}</small></div>`).join(''):`<div class="chat-first">Noch keine Nachrichten. Schreib die erste Nachricht.</div>`;
 }
+function renderConversationPane(conv){
+  if(!conv)return `<section class="messenger-chat empty-chat"><div class="empty-chat-icon">${mobileIcon('chat')}</div><h2>Deine Nachrichten</h2><p>Wähle links eine Unterhaltung oder starte einen Chat über ein Spielerprofil.</p></section>`;
+  const other=conv.conversation.other;
+  return `<section class="messenger-chat" data-active-chat="${conv.conversation.id}"><header class="chat-header"><button type="button" class="chat-back-button" data-close-conversation>${mobileIcon('back')}<span>Alle Nachrichten</span></button><span class="conversation-avatar"><img src="${avatarFor(other)}">${onlineDot(other.is_online)}</span><div class="chat-user-copy"><strong>${esc(other.username)}</strong><small data-chat-presence class="${Number(other.is_online)?'green':'muted'}">${Number(other.is_online)?'Online':'Offline'}</small></div></header><div class="chat-messages" data-chat-messages>${renderMessageBubbles(conv)}</div><form class="chat-compose" data-chat-form="${conv.conversation.id}"><textarea name="body" rows="1" maxlength="3000" placeholder="Nachricht schreiben…" required></textarea><button class="btn btn-primary">SENDEN</button></form></section>`;
+}
+
 async function hydrateMessages(){
   const mount=document.querySelector('#messengerMount');if(!mount||!state.me)return;
   try{
     const list=(await api('/api/messages')).conversations||[];state.conversations=list;
-    const q=new URLSearchParams(location.search),wanted=Number(q.get('c')||0),activeId=wanted||Number(list[0]?.id||0);let conv=null;if(activeId)conv=await api(`/api/messages/${activeId}`);
+    const q=new URLSearchParams(location.search),activeId=Number(q.get('c')||0);let conv=null;if(activeId)conv=await api(`/api/messages/${activeId}`);
+    mount.classList.toggle('conversation-open',!!activeId);
     mount.innerHTML=`${renderConversationList(list,activeId)}${renderConversationPane(conv)}`;bindMessengerUI(activeId);
-    if(state.messagePoll)clearInterval(state.messagePoll);state.messagePoll=setInterval(()=>{if(path()==='/nachrichten')refreshActiveConversation(false)},5000);
+    if(state.messagePoll)clearInterval(state.messagePoll);state.messagePoll=setInterval(()=>{if(path()==='/nachrichten'&&new URLSearchParams(location.search).get('c'))refreshActiveConversation(false)},5000);
   }catch(e){mount.innerHTML=emptyCard('Messenger konnte nicht geladen werden',e.message)}
 }
 function bindMessengerUI(activeId){
   document.querySelectorAll('[data-conversation-id]').forEach(b=>b.onclick=()=>{const id=Number(b.dataset.conversationId);history.replaceState({},'',`/nachrichten?c=${id}`);hydrateMessages();});
+  document.querySelector('[data-close-conversation]')?.addEventListener('click',()=>{history.replaceState({},'','/nachrichten');hydrateMessages();});
   const form=document.querySelector('[data-chat-form]');if(form)form.onsubmit=async e=>{e.preventDefault();const id=Number(form.dataset.chatForm),body=form.body.value.trim();if(!body)return;const btn=form.querySelector('button');btn.disabled=true;try{await api(`/api/messages/${id}/send`,{method:'POST',body:JSON.stringify({body})});form.body.value='';await refreshActiveConversation(true);}catch(err){toast(err.message,'error')}finally{btn.disabled=false}};
   const box=document.querySelector('[data-chat-messages]');if(box)box.scrollTop=box.scrollHeight;
 }
 async function refreshActiveConversation(scroll=true){
-  const q=new URLSearchParams(location.search),id=Number(q.get('c')||state.conversations[0]?.id||0);if(!id)return;try{const conv=await api(`/api/messages/${id}`),chat=document.querySelector('.messenger-chat');if(chat){chat.outerHTML=renderConversationPane(conv);bindMessengerUI(id);if(scroll){const box=document.querySelector('[data-chat-messages]');if(box)box.scrollTop=box.scrollHeight}}}catch{}
+  const q=new URLSearchParams(location.search),id=Number(q.get('c')||0);if(!id)return;
+  try{
+    const conv=await api(`/api/messages/${id}`),chat=document.querySelector(`.messenger-chat[data-active-chat="${id}"]`);if(!chat)return;
+    const box=chat.querySelector('[data-chat-messages]');
+    const wasNearBottom=box?box.scrollHeight-box.scrollTop-box.clientHeight<90:true;
+    if(box){box.innerHTML=renderMessageBubbles(conv);if(scroll||wasNearBottom)box.scrollTop=box.scrollHeight;}
+    const other=conv.conversation.other,presence=chat.querySelector('[data-chat-presence]'),avatar=chat.querySelector('.chat-header .conversation-avatar');
+    if(presence){presence.textContent=Number(other.is_online)?'Online':'Offline';presence.className=Number(other.is_online)?'green':'muted';}
+    if(avatar)avatar.innerHTML=`<img src="${avatarFor(other)}">${onlineDot(other.is_online)}`;
+    // Important: the composer is deliberately not re-rendered here. This preserves text while the 5-second poll runs.
+  }catch{}
 }
 
 function renderTransfers(){
