@@ -595,3 +595,44 @@
   .ref-profile-statbar span{font-size:6.8px!important;margin-top:4px!important;white-space:nowrap!important}
   .award-admin-layout{grid-template-columns:1fr!important}.admin-owned-award{grid-template-columns:46px minmax(0,1fr) auto!important}.admin-owned-award img{width:44px;height:44px}.admin-owned-award .btn{grid-column:2/-1;width:100%}
 }
+
+/* =========================================================
+   EPL v13 — Discord-style name cosmetics + Team/Other shop
+   ========================================================= */
+.epl-styled-name{display:inline-block;color:var(--epl-name-color,#eaf4ff);font-weight:800;line-height:1.08;position:relative;isolation:isolate;transition:.2s ease}
+.epl-font-classic{font-family:Inter,Arial,sans-serif;font-weight:800}
+.epl-font-rounded{font-family:"Arial Rounded MT Bold","Trebuchet MS",Inter,sans-serif;font-weight:800;letter-spacing:.01em}
+.epl-font-serif{font-family:Georgia,"Times New Roman",serif;font-weight:800}
+.epl-font-script{font-family:"Segoe Script","Brush Script MT",cursive;font-weight:800}
+.epl-font-mono{font-family:"Cascadia Mono",Consolas,"Courier New",monospace;font-weight:800}
+.epl-font-impact{font-family:Impact,"Arial Black",sans-serif;font-weight:400;letter-spacing:.045em}
+.epl-font-pixel{font-family:"Lucida Console","Courier New",monospace;font-weight:900;text-transform:uppercase;letter-spacing:.08em}
+.epl-font-wide{font-family:"Arial Black",Inter,sans-serif;font-stretch:expanded;letter-spacing:.11em;text-transform:uppercase}
+.epl-fx-stable{color:var(--epl-name-color,#eaf4ff)}
+.epl-fx-gradient{background:linear-gradient(90deg,var(--epl-name-color,#26a9ff),#88f7ff,#ae5cff,#ff4fc3);background-size:220% 100%;-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;animation:eplGradient 4s linear infinite}
+.epl-fx-neon{color:var(--epl-name-color,#61c8ff);text-shadow:0 0 5px currentColor,0 0 12px currentColor,0 0 25px currentColor}
+.epl-fx-toon{color:var(--epl-name-color,#ff42ac);-webkit-text-stroke:1px rgba(255,255,255,.22);text-shadow:2px 2px 0 rgba(19,9,35,.95),-1px -1px 0 rgba(255,255,255,.12)}
+.epl-fx-pop{color:var(--epl-name-color,#4ff2b0);text-shadow:2px 2px 0 #073c32,4px 4px 0 rgba(13,174,132,.22);transform:skew(-2deg)}
+.epl-fx-glitch{color:var(--epl-name-color,#fff);text-shadow:2px 0 #23b7ff,-2px 0 #ff3da5;animation:eplGlitch 1.8s steps(2,end) infinite}
+.epl-fx-hologram{background:linear-gradient(100deg,#79fff2,var(--epl-name-color,#66aaff),#f29cff,#fff,#71ffd0);background-size:280% 100%;-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;filter:drop-shadow(0 0 5px rgba(93,202,255,.45));animation:eplGradient 2.8s linear infinite}
+.epl-fx-pulse{color:var(--epl-name-color,#55bfff);animation:eplPulse 1.7s ease-in-out infinite}
+.epl-fx-ice{color:#bff4ff;text-shadow:0 0 4px #72e7ff,0 0 15px #2e91ff,0 2px 0 #fff}
+.epl-fx-fire{background:linear-gradient(180deg,#fff7a4 0%,#ffb326 35%,#ff4c19 70%,#ff235d 100%);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;filter:drop-shadow(0 0 7px rgba(255,85,20,.6));animation:eplFire 1.3s ease-in-out infinite alternate}
+@keyframes eplGradient{to{background-position:220% 0}}
+@keyframes eplGlitch{0%,92%,100%{transform:none}94%{transform:translateX(1px)}96%{transform:translateX(-1px)}98%{transform:skewX(3deg)}}
+@keyframes eplPulse{0%,100%{text-shadow:0 0 3px currentColor;transform:scale(1)}50%{text-shadow:0 0 18px currentColor,0 0 30px currentColor;transform:scale(1.025)}}
+@keyframes eplFire{from{filter:drop-shadow(0 0 5px rgba(255,85,20,.45))}to{filter:drop-shadow(0 0 13px rgba(255,183,20,.9))}}
+
+.name-style-shop-preview{height:138px;border:1px solid #203d5e;border-radius:10px;background:radial-gradient(circle at 50% 20%,rgba(23,96,190,.25),transparent 48%),linear-gradient(180deg,#07172b,#07101e);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:9px;padding:14px;overflow:hidden;position:relative}
+.name-style-shop-preview .epl-styled-name{font-size:23px;max-width:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.name-style-shop-preview small{font-size:9px;color:#8095ad;text-transform:uppercase;letter-spacing:.08em}
+.name-style-type-pill{position:absolute;top:8px;left:8px;font-size:8px;border:1px solid #315a83;border-radius:999px;padding:3px 6px;color:#62c5ff;background:#09192a}
+.inventory-name-preview{height:95px;margin-bottom:10px}.inventory-name-preview .epl-styled-name{font-size:18px}
+.team-shop-preview,.other-shop-preview{height:138px;border:1px solid #203d5e;border-radius:10px;background:linear-gradient(145deg,#071523,#0b2138);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:7px;text-align:center;padding:12px}
+.team-shop-icon,.other-shop-preview>span{font-size:34px;color:#38b8ff}.other-shop-preview .verified.big{display:grid;place-items:center;width:46px;height:46px;border-radius:50%;background:#168fff;color:white;font-size:27px}.other-shop-preview strong,.team-shop-preview strong{font-family:Rajdhani,Inter,sans-serif;font-size:16px}.other-shop-preview small,.team-shop-preview small{font-size:9px;color:#94a9bf}
+.spotlight-preview{box-shadow:inset 0 0 38px rgba(88,55,255,.2)}.spotlight-preview>span{color:#a788ff;text-shadow:0 0 14px #7d4dff}
+.team-shop-balance-panel{margin-bottom:12px}.team-shop-wallet{display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid #18304a;padding:10px 0}.team-shop-wallet strong{font-family:Rajdhani,Inter,sans-serif;font-size:23px;color:#43c4ff}.team-entitlement-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin:10px 0}.team-entitlement-grid>div{border:1px solid #17314c;border-radius:7px;padding:8px 4px;text-align:center;background:#06111e}.team-entitlement-grid strong{display:block;color:#fff;font-size:18px}.team-entitlement-grid span{font-size:8px;color:#8fa3ba;text-transform:uppercase}
+.shop-profile-spotlight{box-shadow:inset 0 0 65px rgba(93,62,255,.15),0 0 35px rgba(32,134,255,.12)}
+.name-style-choice-grid .cosmetic-choice{min-width:155px}.choice-preview.name-style{height:72px;display:flex;align-items:center;justify-content:center;padding:8px;background:#06111f;border-radius:7px}.choice-preview.name-style .epl-styled-name{font-size:16px;max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.manager-credit-actions{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:14px 0;padding:10px;border:1px solid #193650;border-radius:8px;background:#071422}.manager-credit-actions>span{font-size:11px;color:#9db0c4;padding:6px 9px;border-radius:6px;background:#091b2d}.manager-credit-actions b{color:#46c7ff}
+
+@media(max-width:700px){.name-style-shop-preview,.team-shop-preview,.other-shop-preview{height:112px;padding:9px}.name-style-shop-preview .epl-styled-name{font-size:17px}.name-style-choice-grid{grid-template-columns:repeat(2,minmax(0,1fr))!important}.name-style-choice-grid .cosmetic-choice{min-width:0}.team-entitlement-grid{grid-template-columns:1fr}.shop-tabs{max-width:100%;overflow-x:auto;scrollbar-width:none}.dynamic-shop-card{min-width:0!important;max-width:100%!important}}
