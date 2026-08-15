@@ -1,7 +1,7 @@
 export const demo = {
   brand: {
     name: 'EPL - Elite Pro League',
-    logo: '/assets/user/logo.png',
+    logo: '/assets/brand/epl-logo.png',
     trophy: '/assets/user/EPLTrophy.png',
     defaultAvatar: '/assets/user/standardprofilbild.png',
     defaultClub: '/assets/user/EPLTrophy.png',
