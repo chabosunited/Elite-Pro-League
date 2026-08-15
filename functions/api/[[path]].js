@@ -445,12 +445,12 @@ async function equipItem(request,env){
   const db=requireDb(env),u=await requireUser(request,env),b=await request.json();
   const slot=cleanText(b.slot,30),rawItem=b.itemId,itemId=rawItem===null||rawItem===''?null:(String(rawItem).toUpperCase()==='TOTW'?'TOTW':Number(rawItem));
   const slots={
-    avatar_frame:{category:'AVATAR_FRAME',col:'equipped_avatar_frame_id',itemType:'AVATAR_FRAME'},avatarFrame:{category:'AVATAR_FRAME',col:'equipped_avatar_frame_id',itemType:'AVATAR_FRAME'},
-    cover_frame:{category:'COVER_FRAME',col:'equipped_cover_frame_id',itemType:'COVER_FRAME'},coverFrame:{category:'COVER_FRAME',col:'equipped_cover_frame_id',itemType:'COVER_FRAME'},
-    name_effect:{category:'NAME_EFFECT',col:'equipped_name_effect_id',itemType:'NAME_EFFECT'},nameEffect:{category:'NAME_EFFECT',col:'equipped_name_effect_id',itemType:'NAME_EFFECT'},
-    name_font:{category:'NAME_EFFECT',col:'equipped_name_font_id',itemType:'NAME_FONT'},nameFont:{category:'NAME_EFFECT',col:'equipped_name_font_id',itemType:'NAME_FONT'},
-    name_color:{category:'NAME_EFFECT',col:'equipped_name_color_id',itemType:'NAME_COLOR'},nameColor:{category:'NAME_EFFECT',col:'equipped_name_color_id',itemType:'NAME_COLOR'},
-    badge:{category:'BADGE',col:'equipped_badge_id',itemType:'BADGE'}
+    avatar_frame:{category:'AVATAR_FRAME',col:'equipped_avatar_frame_id',itemTypes:['AVATAR_FRAME','ANIMATED_AVATAR_FRAME']},avatarFrame:{category:'AVATAR_FRAME',col:'equipped_avatar_frame_id',itemTypes:['AVATAR_FRAME','ANIMATED_AVATAR_FRAME']},
+    cover_frame:{category:'COVER_FRAME',col:'equipped_cover_frame_id',itemTypes:['COVER_FRAME']},coverFrame:{category:'COVER_FRAME',col:'equipped_cover_frame_id',itemTypes:['COVER_FRAME']},
+    name_effect:{category:'NAME_EFFECT',col:'equipped_name_effect_id',itemTypes:['NAME_EFFECT']},nameEffect:{category:'NAME_EFFECT',col:'equipped_name_effect_id',itemTypes:['NAME_EFFECT']},
+    name_font:{category:'NAME_EFFECT',col:'equipped_name_font_id',itemTypes:['NAME_FONT']},nameFont:{category:'NAME_EFFECT',col:'equipped_name_font_id',itemTypes:['NAME_FONT']},
+    name_color:{category:'NAME_EFFECT',col:'equipped_name_color_id',itemTypes:['NAME_COLOR']},nameColor:{category:'NAME_EFFECT',col:'equipped_name_color_id',itemTypes:['NAME_COLOR']},
+    badge:{category:'BADGE',col:'equipped_badge_id',itemTypes:['BADGE']}
   };
   const cfg=slots[slot];if(!cfg)return fail('Ungültiger Cosmetic-Slot.');
   if(itemId==='TOTW'){
@@ -463,17 +463,17 @@ async function equipItem(request,env){
     if(!Number.isInteger(itemId)||itemId<=0)return fail('Ungültiges Shop-Item.');
     const owned=await db.prepare(`SELECT si.id,si.category,si.item_type FROM user_inventory ui JOIN shop_items si ON si.id=ui.item_id WHERE ui.user_id=? AND ui.item_id=?`).bind(u.id,itemId).first();
     if(!owned)return fail('Dieses Cosmetic befindet sich nicht in deinem Inventar.',403);
-    if(owned.category!==cfg.category||String(owned.item_type||'')!==cfg.itemType)return fail('Dieses Cosmetic passt nicht in den gewählten Slot.',409);
+    if(owned.category!==cfg.category||!cfg.itemTypes.includes(String(owned.item_type||'')))return fail('Dieses Cosmetic passt nicht in den gewählten Slot.',409);
   }
   const stmts=[db.prepare(`UPDATE profiles SET ${cfg.col}=?,${cfg.category==='AVATAR_FRAME'?'use_totw_frame=0,':''}updated_at=datetime('now') WHERE user_id=?`).bind(itemId,u.id)];
-  stmts.push(db.prepare(`UPDATE user_inventory SET equipped=CASE WHEN item_id=? THEN 1 ELSE 0 END WHERE user_id=? AND item_id IN (SELECT id FROM shop_items WHERE item_type=?)`).bind(itemId||-1,u.id,cfg.itemType));await db.batch(stmts);return getInventory(request,env);
+  if(cfg.col==='equipped_avatar_frame_id')stmts.push(db.prepare(`UPDATE user_inventory SET equipped=CASE WHEN item_id=? THEN 1 ELSE 0 END WHERE user_id=? AND item_id IN (SELECT id FROM shop_items WHERE item_type IN ('AVATAR_FRAME','ANIMATED_AVATAR_FRAME'))`).bind(itemId||-1,u.id));else stmts.push(db.prepare(`UPDATE user_inventory SET equipped=CASE WHEN item_id=? THEN 1 ELSE 0 END WHERE user_id=? AND item_id IN (SELECT id FROM shop_items WHERE item_type=?)`).bind(itemId||-1,u.id,cfg.itemTypes[0]));await db.batch(stmts);return getInventory(request,env);
 }
 async function removeOwnedItem(request,env){
   const db=requireDb(env),u=await requireUser(request,env),b=await request.json(),itemId=Number(b.itemId);
   if(!Number.isInteger(itemId)||itemId<=0)return fail('Ungültiges Shop-Item.');
   const item=await db.prepare(`SELECT si.id,si.name,si.category,si.item_type FROM user_inventory ui JOIN shop_items si ON si.id=ui.item_id WHERE ui.user_id=? AND ui.item_id=?`).bind(u.id,itemId).first();
   if(!item)return fail('Dieser Inhalt befindet sich nicht in deinem Inventar.',404);
-  const col={AVATAR_FRAME:'equipped_avatar_frame_id',COVER_FRAME:'equipped_cover_frame_id',NAME_EFFECT:'equipped_name_effect_id',NAME_FONT:'equipped_name_font_id',NAME_COLOR:'equipped_name_color_id',BADGE:'equipped_badge_id'}[item.item_type]||({AVATAR_FRAME:'equipped_avatar_frame_id',COVER_FRAME:'equipped_cover_frame_id',BADGE:'equipped_badge_id'}[item.category]);
+  const col={AVATAR_FRAME:'equipped_avatar_frame_id',ANIMATED_AVATAR_FRAME:'equipped_avatar_frame_id',COVER_FRAME:'equipped_cover_frame_id',NAME_EFFECT:'equipped_name_effect_id',NAME_FONT:'equipped_name_font_id',NAME_COLOR:'equipped_name_color_id',BADGE:'equipped_badge_id'}[item.item_type]||({AVATAR_FRAME:'equipped_avatar_frame_id',COVER_FRAME:'equipped_cover_frame_id',BADGE:'equipped_badge_id'}[item.category]);
   const stmts=[];
   if(col)stmts.push(db.prepare(`UPDATE profiles SET ${col}=NULL,updated_at=datetime('now') WHERE user_id=? AND ${col}=?`).bind(u.id,itemId));
   if(item.item_type==='PROFILE_VERIFIED')stmts.push(db.prepare(`UPDATE profiles SET shop_verified=0,updated_at=datetime('now') WHERE user_id=?`).bind(u.id));
@@ -657,10 +657,10 @@ async function verifyStripe(payload,header,secret){const parts=Object.fromEntrie
 async function uploadMedia(request,env){
   const u=await requireUser(request,env),db=requireDb(env);
   const form=await request.formData(),file=form.get('file'),kind=String(form.get('kind')||'avatar'),externalUrl=cleanText(form.get('externalUrl'),1200);
-  const allowedKinds=['avatar','cover','club-logo','club-cover','post-media','cms-media','shop-media'];
+  const allowedKinds=['avatar','cover','club-logo','club-cover','post-media','cms-media','shop-media','shop-animated-media'];
   if(!allowedKinds.includes(kind))return fail('Ungültiger Bildtyp.');
   if(kind==='cms-media')await requireAdminPermission(request,env,'cms');
-  if(kind==='shop-media')await requireAdminPermission(request,env,'shop');
+  if(kind==='shop-media'||kind==='shop-animated-media')await requireAdminPermission(request,env,'shop');
   if(externalUrl&&file instanceof File)return fail('Bitte entweder Datei oder URL verwenden, nicht beides.');
   if(!externalUrl&&!(file instanceof File))return fail('Keine Datei oder Bild-URL übermittelt.');
   if(externalUrl){
@@ -669,16 +669,20 @@ async function uploadMedia(request,env){
   }
   if(!externalUrl){
     if(!env.MEDIA)return fail('R2 binding MEDIA fehlt.',503);
-    if(file.type!=='image/webp')return fail('Bilder müssen vor dem Upload als WebP optimiert werden.');
-    const maxBytes=(kind==='avatar'||kind==='club-logo')?450*1024:(kind==='post-media'||kind==='cms-media'||kind==='shop-media'?1000*1024:800*1024);
-    if(file.size>maxBytes)return fail(`Optimiertes Bild ist zu groß. Maximal ${Math.round(maxBytes/1024)} KB erlaubt.`);
+    if(kind==='shop-animated-media'){
+      if(!['image/gif','image/png','image/webp'].includes(file.type))return fail('Animierte Rahmen müssen GIF, PNG/APNG oder WebP sein.');
+      if(file.size>6*1024*1024)return fail('Animierter Rahmen ist zu groß. Maximal 6 MB.');
+    }else if(file.type!=='image/webp')return fail('Bilder müssen vor dem Upload als WebP optimiert werden.');
+    const maxBytes=kind==='shop-animated-media'?6*1024*1024:(kind==='avatar'||kind==='club-logo')?450*1024:(kind==='post-media'||kind==='cms-media'||kind==='shop-media'?1000*1024:800*1024);
+    if(file.size>maxBytes)return fail(`Bild ist zu groß. Maximal ${Math.round(maxBytes/1024)} KB erlaubt.`);
   }
   let key,oldKey=null,oldWasR2=false;
-  if(kind==='post-media'||kind==='cms-media'||kind==='shop-media'){
+  if(kind==='post-media'||kind==='cms-media'||kind==='shop-media'||kind==='shop-animated-media'){
     if(externalUrl)return json({key:externalUrl,url:externalUrl,external:true,bytes:0});
-    key=kind==='post-media'?`posts/${u.id}/media-${crypto.randomUUID()}.webp`:kind==='shop-media'?`shop/${u.id}/media-${crypto.randomUUID()}.webp`:`cms/${u.id}/media-${crypto.randomUUID()}.webp`;
-    await env.MEDIA.put(key,file.stream(),{httpMetadata:{contentType:'image/webp',cacheControl:'public, max-age=31536000, immutable'},customMetadata:{kind,optimized:'client-webp-v9'}});
-    return json({key,url:`/api/media/${encodeURIComponent(key)}`,contentType:'image/webp',bytes:file.size});
+    const animated=kind==='shop-animated-media',ext=animated?(file.type==='image/gif'?'gif':file.type==='image/webp'?'webp':'png'):'webp',contentType=animated?file.type:'image/webp';
+    key=kind==='post-media'?`posts/${u.id}/media-${crypto.randomUUID()}.webp`:kind==='shop-media'?`shop/${u.id}/media-${crypto.randomUUID()}.webp`:kind==='shop-animated-media'?`shop/animated/${u.id}/frame-${crypto.randomUUID()}.${ext}`:`cms/${u.id}/media-${crypto.randomUUID()}.webp`;
+    await env.MEDIA.put(key,file.stream(),{httpMetadata:{contentType,cacheControl:'public, max-age=31536000, immutable'},customMetadata:{kind,optimized:animated?'preserve-animation':'client-webp-v9'}});
+    return json({key,url:`/api/media/${encodeURIComponent(key)}`,contentType,bytes:file.size,animated});
   }
   if(kind==='club-logo'||kind==='club-cover'){
     const clubSlug=cleanText(form.get('clubSlug'),60);
@@ -1563,7 +1567,7 @@ async function getBootstrap(env){
 // ============================================================
 async function getShopCatalog(request,env){
   const db=requireDb(env),viewer=await currentUser(request,env);let managedClub=null,teamEntitlements=null;if(viewer?.managed_club_slug){managedClub=await db.prepare(`SELECT c.id,c.name,c.slug,COALESCE(cw.balance,0) club_balance FROM clubs c LEFT JOIN club_coin_wallets cw ON cw.club_id=c.id WHERE c.slug=?`).bind(viewer.managed_club_slug).first();if(managedClub){await db.prepare(`INSERT OR IGNORE INTO club_shop_entitlements(club_id) VALUES(?)`).bind(managedClub.id).run();teamEntitlements=await db.prepare(`SELECT transfer_credits,release_credits,red_card_removal_credits FROM club_shop_entitlements WHERE club_id=?`).bind(managedClub.id).first();}}
-  const [items,parts]=await Promise.all([db.prepare(`SELECT id,sku,name,category,description,price_coins,price_eur_cents,asset_key,rarity,active,shop_group,item_type,style_key,style_value FROM shop_items WHERE active=1 AND (shop_group<>'TEAM' OR ?=1) ORDER BY CASE shop_group WHEN 'AVATAR_FRAME' THEN 1 WHEN 'COVER_FRAME' THEN 2 WHEN 'NAME_STYLES' THEN 3 WHEN 'BADGE' THEN 4 WHEN 'BUNDLE' THEN 5 WHEN 'TEAM' THEN 6 WHEN 'OTHER' THEN 7 ELSE 9 END,id`).bind(managedClub?1:0).all(),db.prepare(`SELECT sbi.bundle_item_id,sbi.item_id,si.name,si.category,si.asset_key,si.rarity FROM shop_bundle_items sbi JOIN shop_items si ON si.id=sbi.item_id ORDER BY sbi.bundle_item_id,sbi.item_id`).all()]);const byBundle={};for(const x of parts.results||[])(byBundle[x.bundle_item_id]??=[]).push(x);return json({items:(items.results||[]).map(x=>({...x,bundle_items:byBundle[x.id]||[]})),managedClub,teamEntitlements});
+  const [items,parts]=await Promise.all([db.prepare(`SELECT id,sku,name,category,description,price_coins,price_eur_cents,asset_key,rarity,active,shop_group,item_type,style_key,style_value FROM shop_items WHERE active=1 AND (shop_group<>'TEAM' OR ?=1) ORDER BY CASE shop_group WHEN 'AVATAR_FRAME' THEN 1 WHEN 'ANIMATED_FRAME' THEN 2 WHEN 'COVER_FRAME' THEN 3 WHEN 'NAME_STYLES' THEN 4 WHEN 'BADGE' THEN 5 WHEN 'BUNDLE' THEN 6 WHEN 'TEAM' THEN 7 WHEN 'OTHER' THEN 8 ELSE 9 END,id`).bind(managedClub?1:0).all(),db.prepare(`SELECT sbi.bundle_item_id,sbi.item_id,si.name,si.category,si.asset_key,si.rarity FROM shop_bundle_items sbi JOIN shop_items si ON si.id=sbi.item_id ORDER BY sbi.bundle_item_id,sbi.item_id`).all()]);const byBundle={};for(const x of parts.results||[])(byBundle[x.bundle_item_id]??=[]).push(x);return json({items:(items.results||[]).map(x=>({...x,bundle_items:byBundle[x.id]||[]})),managedClub,teamEntitlements});
 }
 async function adminShopOverview(request,env){
   const db=requireDb(env);await requireAdminPermission(request,env,'shop');
@@ -1604,12 +1608,14 @@ async function adminCmsBlockSave(request,env){
 async function adminCmsBlockDelete(request,env){const db=requireDb(env);await requireAdminPermission(request,env,'cms');const b=await request.json(),id=asId(b.id);if(!id)return fail('Block fehlt.');await db.prepare('DELETE FROM cms_page_blocks WHERE id=?').bind(id).run();return json({ok:true});}
 
 async function adminShopSave(request,env){
-  const db=requireDb(env);await requireAdminPermission(request,env,'shop');const b=await request.json(),id=asId(b.id),name=cleanText(b.name,100),cat=cleanText(b.category,30).toUpperCase();
-  if(!name||!['AVATAR_FRAME','COVER_FRAME','NAME_EFFECT','BADGE','BUNDLE'].includes(cat))return fail('Ungültiges Shop-Item.');
-  const sku=cleanText(b.sku||slugify(name).replaceAll('-','_'),80),vals=[sku,name,cat,cleanText(b.description,600),Math.max(0,Math.trunc(Number(b.priceCoins)||0)),Math.max(0,Math.trunc(Number(b.priceEurCents)||0)),cleanText(b.assetKey,1200),cleanText(b.rarity||'COMMON',30),bool01(b.active)];let itemId=id;
-  if(id)await db.prepare(`UPDATE shop_items SET sku=?,name=?,category=?,description=?,price_coins=?,price_eur_cents=?,asset_key=?,rarity=?,active=? WHERE id=?`).bind(...vals,id).run();
-  else{const r=await db.prepare(`INSERT INTO shop_items(sku,name,category,description,price_coins,price_eur_cents,asset_key,rarity,active) VALUES(?,?,?,?,?,?,?,?,?)`).bind(...vals).run();itemId=Number(r.meta.last_row_id);}
-  if(cat==='BUNDLE'){
+  const db=requireDb(env);await requireAdminPermission(request,env,'shop');const b=await request.json(),id=asId(b.id),name=cleanText(b.name,100),requested=cleanText(b.category,30).toUpperCase();
+  if(!name||!['AVATAR_FRAME','ANIMATED_FRAME','COVER_FRAME','NAME_EFFECT','BADGE','BUNDLE'].includes(requested))return fail('Ungültiges Shop-Item.');
+  const cat=requested==='ANIMATED_FRAME'?'AVATAR_FRAME':requested,existing=id?await db.prepare(`SELECT category,shop_group,item_type FROM shop_items WHERE id=?`).bind(id).first():null;
+  let group,type;if(requested==='ANIMATED_FRAME'){group='ANIMATED_FRAME';type='ANIMATED_AVATAR_FRAME';}else if(existing&&existing.category===cat&&existing.shop_group&&existing.item_type&&existing.shop_group!=='ANIMATED_FRAME'){group=existing.shop_group;type=existing.item_type;}else{group={AVATAR_FRAME:'AVATAR_FRAME',COVER_FRAME:'COVER_FRAME',NAME_EFFECT:'NAME_STYLES',BADGE:'BADGE',BUNDLE:'BUNDLE'}[cat]||'COSMETIC';type={AVATAR_FRAME:'AVATAR_FRAME',COVER_FRAME:'COVER_FRAME',NAME_EFFECT:'NAME_EFFECT',BADGE:'BADGE',BUNDLE:'BUNDLE'}[cat]||'COSMETIC';}
+  const sku=cleanText(b.sku||slugify(name).replaceAll('-','_'),80),vals=[sku,name,cat,cleanText(b.description,600),Math.max(0,Math.trunc(Number(b.priceCoins)||0)),Math.max(0,Math.trunc(Number(b.priceEurCents)||0)),cleanText(b.assetKey,1200),cleanText(b.rarity||'COMMON',30),bool01(b.active),group,type];let itemId=id;
+  if(id)await db.prepare(`UPDATE shop_items SET sku=?,name=?,category=?,description=?,price_coins=?,price_eur_cents=?,asset_key=?,rarity=?,active=?,shop_group=?,item_type=? WHERE id=?`).bind(...vals,id).run();
+  else{const r=await db.prepare(`INSERT INTO shop_items(sku,name,category,description,price_coins,price_eur_cents,asset_key,rarity,active,shop_group,item_type) VALUES(?,?,?,?,?,?,?,?,?,?,?)`).bind(...vals).run();itemId=Number(r.meta.last_row_id);}
+  if(cat==='BUNDLE'&&group==='BUNDLE'){
     const ids=[...new Set((Array.isArray(b.bundleItemIds)?b.bundleItemIds:[]).map(Number).filter(x=>Number.isInteger(x)&&x>0&&x!==itemId))];
     const statements=[db.prepare('DELETE FROM shop_bundle_items WHERE bundle_item_id=?').bind(itemId)];
     for(const child of ids){const exists=await db.prepare(`SELECT id FROM shop_items WHERE id=? AND category<>'BUNDLE'`).bind(child).first();if(exists)statements.push(db.prepare('INSERT OR IGNORE INTO shop_bundle_items(bundle_item_id,item_id) VALUES(?,?)').bind(itemId,child));}
