@@ -1,0 +1,178 @@
+Datenschutzerklärung
+Verantwortlicher
+
+Verantwortlicher für die Verarbeitung personenbezogener Daten:
+
+Marco Banter
+Behrenstraße 31
+10117 Berlin
+Deutschland
+
+E-Mail:
+eliteproleague@gmail.com
+
+Hosting und technische Infrastruktur
+
+Die EPL verwendet Cloudflare-Dienste für die technische Bereitstellung der Plattform.
+
+Hierzu gehören nach aktuellem Stand insbesondere Cloudflare Pages beziehungsweise Workers, Cloudflare D1 sowie weitere für Speicherung, Sicherheit und Bereitstellung eingesetzte Cloudflare-Dienste.
+
+Cloudflare stellt hierzu ein Data Processing Addendum für die Verarbeitung personenbezogener Daten im Auftrag seiner Kunden bereit.
+
+Serverdaten
+
+Beim Zugriff auf die EPL können technisch erforderliche Verbindungs- und Sicherheitsdaten verarbeitet werden.
+
+Hierzu können insbesondere IP-Adresse, Zeitpunkt des Zugriffs, aufgerufene Ressource, Browserinformationen, Geräteinformationen sowie Sicherheits- und Fehlerdaten gehören.
+
+Die Verarbeitung dient insbesondere der technischen Bereitstellung, Sicherheit und Fehlerbehebung.
+
+Registrierung
+
+Für ein EPL-Konto werden je nach Registrierungsart insbesondere Benutzerkennung, E-Mail-Adresse, Login-Daten beziehungsweise OAuth-Kennung, Registrierungszeitpunkt und Accountstatus verarbeitet.
+
+Google Login
+
+Bei Verwendung des Google-Logins findet eine Authentifizierung über Google statt.
+
+Die EPL verarbeitet nur diejenigen Kontoinformationen, die über die tatsächlich verwendeten OAuth-Berechtigungen freigegeben werden.
+
+Discord Login
+
+Bei Anmeldung über Discord erfolgt die Authentifizierung über Discord.
+
+Hierbei können abhängig von den verwendeten Berechtigungen insbesondere eine Discord-Benutzer-ID, Benutzername und gegebenenfalls die E-Mail-Adresse an die EPL übermittelt werden.
+
+E-Mail Login
+
+Die EPL kann eine Anmeldung beziehungsweise Verifizierung per E-Mail anbieten.
+
+Zu deiner Frage Nummer 12: Ich meinte damit nicht deine Adresse eliteproleague@gmail.com, sondern den technischen Dienst, der beispielsweise eine Nachricht wie
+
+„Bestätige deine E-Mail-Adresse“
+
+oder
+
+„Hier ist dein Login-Link“
+
+verschickt.
+
+Cloudflare D1 speichert deine Daten, verschickt aber nicht automatisch solche Anmelde-E-Mails.
+
+Falls dein E-Mail-Login derzeit noch keinen separaten Versanddienst verwendet, würde ich diesen Absatz zunächst neutral halten. Sobald du weißt, ob beispielsweise ein externer SMTP-/Mail-Dienst verwendet wird, muss dieser Anbieter hier ergänzt werden.
+
+Profile
+
+Bei Verwendung eines Spieler- beziehungsweise Benutzerprofils können insbesondere verarbeitet werden:
+
+Benutzername, Spielername, Profil- und Titelbild, Bio, Position, Verein, Statistiken, Karriereinformationen, Erfolge, Marktwert, Social-Media-Links sowie öffentliche Aktivitäten.
+
+Je nach Funktion sind diese Daten für andere Besucher beziehungsweise registrierte Nutzer sichtbar.
+
+Beiträge und Social-Funktionen
+
+Bei Nutzung der Community-Funktionen verarbeitet die EPL insbesondere Beiträge, Bilder, Kommentare, Antworten, Likes, Follows, Erwähnungen und die jeweiligen Zeitpunkte der Interaktion.
+
+Inhalte, die Nutzer öffentlich posten, sind entsprechend ihrer Funktion öffentlich oder für andere EPL-Nutzer sichtbar.
+
+Messenger
+
+Private EPL-Nachrichten werden serverseitig gespeichert.
+
+Nach dem bisherigen technischen Aufbau werden Messenger-Unterhaltungen in Cloudflare D1 gespeichert.
+
+Cloudflare D1 verschlüsselt gespeicherte Daten automatisch im Ruhezustand. Diese Verschlüsselung entspricht jedoch nicht automatisch einer Ende-zu-Ende-Verschlüsselung.
+
+Deshalb würde ich in der Datenschutzerklärung schreiben:
+
+Private EPL-Nachrichten werden technisch auf der Serverinfrastruktur der EPL gespeichert. Sie sind nicht öffentlich zugänglich. Die EPL bewirbt den Nachrichtendienst derzeit nicht als Ende-zu-Ende-verschlüsselt.
+
+Admin-Zugriff auf Chats
+
+Ich würde keinen allgemeinen „Alle privaten Chats ansehen“-Button für EPL-Admins einbauen.
+
+Besser ist:
+
+Nachricht → Melden → Nutzer wählt konkrete Nachricht → nur diese Meldung und notwendiger Kontext werden einem berechtigten Moderator bereitgestellt.
+
+Damit kannst du Belästigung, Drohungen oder Betrug moderieren, ohne deinen Admins pauschalen Zugriff auf jede private Unterhaltung zu geben.
+
+Statistiken und Karriere
+
+Für den Ligabetrieb verarbeitet die EPL unter anderem Spieleinsätze, Tore, Assists, Torhüterstatistiken, Ergebnisse, Man-of-the-Match-Auszeichnungen, Vereinszugehörigkeiten, Transfers und weitere Leistungsdaten.
+
+Daraus können EPL-interne Werte wie Marktwerte, Rekorde, Achievements und Karriereinformationen abgeleitet werden.
+
+EPL Coins und Shop
+
+Die EPL kann Coin-Guthaben, virtuelle Transaktionen, freigeschaltete Cosmetics und Kaufhistorien verarbeiten.
+
+Aktuell findet kein Echtgeldverkauf von EPL Coins statt.
+
+Sobald Echtgeldkäufe aktiviert werden, wird dieser Abschnitt um den tatsächlichen Zahlungsdienstleister und die entsprechenden Zahlungsdaten erweitert.
+
+PaysafeCard – zukünftige Nutzung
+
+Geplant ist eine zukünftige Integration von PaysafeCard.
+
+Diese wird erst in die Datenschutzerklärung aufgenommen, wenn die technische und vertragliche Integration tatsächlich erfolgt ist.
+
+PaysafeCard sieht für Händler eine offizielle Integration über deren System beziehungsweise einen unterstützten Payment Gateway vor.
+
+Uploads
+
+Die EPL verarbeitet vom Nutzer bereitgestellte Profilbilder, Titelbilder, Vereinslogos und Bilder in Beiträgen.
+
+Die Dateien können vor der Speicherung technisch skaliert oder komprimiert werden.
+
+Cookies und lokale Speicherung
+
+Die EPL verwendet technisch erforderliche Speichermechanismen insbesondere für Anmeldung, Sitzung, Sicherheit und Benutzereinstellungen.
+
+Derzeit werden nach deinen Angaben keine Google-Analytics-, Meta-Pixel-, TikTok-Pixel- oder vergleichbaren Marketing-Tracking-Dienste eingesetzt.
+
+Das ist datenschutzrechtlich für den Start sehr angenehm, weil dadurch ein großer Teil des üblichen Consent-/Tracking-Komplexes entfällt.
+
+Minderjährige
+
+Die EPL ist grundsätzlich für Nutzer ab 16 Jahren vorgesehen.
+
+Nutzer zwischen 13 und 15 Jahren dürfen die EPL nur mit Zustimmung eines Erziehungsberechtigten verwenden.
+
+Bei einwilligungsbasierter Datenverarbeitung unterhalb der maßgeblichen Altersgrenze sind angemessene Anstrengungen erforderlich, um zu überprüfen, dass die Zustimmung tatsächlich vom Träger der elterlichen Verantwortung stammt.
+
+Speicherdauer
+
+Personenbezogene Daten werden nur so lange gespeichert, wie sie für den jeweiligen Zweck erforderlich sind. Dieses Prinzip der Speicherbegrenzung ist ausdrücklich in Art. 5 Abs. 1 lit. e DSGVO vorgesehen.
+
+Für die EPL würde ich folgende interne Regel festlegen:
+
+Aktive Accounts: solange das Konto besteht.
+Gelöschte Accounts: Löschung beziehungsweise Anonymisierung aus dem aktiven System möglichst zeitnah.
+Technische Backups: Restdaten können für maximal 30 Tage verbleiben und werden anschließend überschrieben.
+Sicherheits-/Fehlerlogs: grundsätzlich maximal 30 Tage, sofern kein Sicherheitsvorfall eine längere Speicherung erforderlich macht.
+Moderationsfälle: solange erforderlich, um die jeweilige Meldung, Sperre oder einen möglichen Rechtsstreit bearbeiten zu können.
+
+Ich würde nicht 14 Tage versprechen, weil Cloudflare D1 je nach Tarif bereits unterschiedliche Point-in-Time-Restore-Zeiträume hat: aktuell 7 Tage im Free-Tarif und 30 Tage bei Workers Paid. Mit „maximal 30 Tage in technischen Sicherungssystemen“ bist du technisch wesentlich flexibler.
+
+Rechte der Nutzer
+
+Nutzer haben unter den jeweiligen gesetzlichen Voraussetzungen insbesondere Rechte auf Auskunft, Berichtigung, Löschung, Einschränkung der Verarbeitung, Datenübertragbarkeit und Widerspruch.
+
+Bei einwilligungsbasierten Verarbeitungen kann eine Einwilligung für die Zukunft widerrufen werden.
+
+Anfragen können an
+
+eliteproleague@gmail.com
+
+gerichtet werden.
+
+Schweiz
+
+Da du die EPL ausdrücklich für den gesamten DACH-Raum einschließlich Schweiz anbieten möchtest, sollte die Datenschutzerklärung später zusätzlich einen kurzen Schweiz-Abschnitt enthalten.
+
+In der Schweiz gilt seit September 2023 das revidierte Bundesgesetz über den Datenschutz (DSG/FADP).
+
+Für Schweizer Nutzer können insbesondere Informations-, Berichtigungs- und Löschungsrechte nach Schweizer Datenschutzrecht zusätzlich relevant sein. Der Schweizer EDÖB nennt beispielsweise ausdrücklich das Recht, Auskunft über verarbeitete Daten, Zwecke, Empfänger und Speicherdauer zu verlangen.
+
+Stand: 16. Juli 2026

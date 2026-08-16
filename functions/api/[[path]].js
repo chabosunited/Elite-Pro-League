@@ -1046,7 +1046,7 @@ async function adminAwardRevoke(request,env){
   const db=requireDb(env),admin=await requireAdminPermission(request,env,'awards'),b=await request.json(),userId=asId(b.userId),kind=cleanText(b.kind,20).toUpperCase(),note=cleanText(b.note,300)||'Durch Full Admin entfernt';if(!userId)return fail('Spieler fehlt.');
   if(kind==='TROPHY'){
     const trophyId=asId(b.trophyId),removeAll=bool01(b.removeAll),qty=Math.max(1,Math.min(20,Math.trunc(Number(b.quantity)||1)));
-    if(!trophyId)return fail('Auszeichnung fehlt.');const row=await db.prepare(`SELECT ut.quantity,t.name FROM user_trophies ut JOIN trophies t ON t.id=ut.trophy_id WHERE ut.user_id=? AND ut.trophy_id=?`).bind(userId,trophyId).first();if(!row)return fail('Diese Auszeichnung besitzt der Spieler nicht.',404);const remove=removeAll?Number(row.quantity):Math.min(Number(row.quantity),qty);if(remove>=Number(row.quantity))await db.prepare('DELETE FROM user_trophies WHERE user_id=? AND trophy_id=?').bind(userId,trophyId).run();else await db.prepare(`UPDATE user_trophies SET quantity=quantity-?,awarded_at=datetime('now') WHERE user_id=? AND trophy_id=?`).bind(remove,userId,trophyId).run();await db.prepare(`INSERT INTO admin_award_log(user_id,award_kind,trophy_id,quantity_delta,note,admin_user_id) VALUES(?,'TROPHY',?, ?,?,?)`).bind(userId,trophyId,-remove,note,admin.id).run();return json({ok:true,removed:remove,name:row.name});
+    if(!trophyId)return fail('Auszeichnung fehlt.');const row=await db.prepare(`SELECT ut.quantity,COALESCE(ut.automatic_quantity,0) automatic_quantity,t.name FROM user_trophies ut JOIN trophies t ON t.id=ut.trophy_id WHERE ut.user_id=? AND ut.trophy_id=?`).bind(userId,trophyId).first();if(!row)return fail('Diese Auszeichnung besitzt der Spieler nicht.',404);const manual=Math.max(0,Number(row.quantity)-Number(row.automatic_quantity||0));if(manual<1)return fail('Automatisch sportlich verdiente Auszeichnungen können nicht manuell entzogen werden.',409);const remove=removeAll?manual:Math.min(manual,qty);const next=Number(row.quantity)-remove;if(next<=0)await db.prepare('DELETE FROM user_trophies WHERE user_id=? AND trophy_id=?').bind(userId,trophyId).run();else await db.prepare(`UPDATE user_trophies SET quantity=?,awarded_at=datetime('now') WHERE user_id=? AND trophy_id=?`).bind(next,userId,trophyId).run();await db.prepare(`INSERT INTO admin_award_log(user_id,award_kind,trophy_id,quantity_delta,note,admin_user_id) VALUES(?,'TROPHY',?, ?,?,?)`).bind(userId,trophyId,-remove,note,admin.id).run();return json({ok:true,removed:remove,name:row.name});
   }
   if(kind==='ACHIEVEMENT'){
     const achievementId=asId(b.achievementId);if(!achievementId)return fail('Achievement fehlt.');await db.prepare('DELETE FROM player_achievement_unlocks WHERE user_id=? AND achievement_id=?').bind(userId,achievementId).run();await db.prepare(`INSERT INTO admin_award_log(user_id,award_kind,achievement_id,quantity_delta,note,admin_user_id) VALUES(?,'ACHIEVEMENT',?,-1,?,?)`).bind(userId,achievementId,note,admin.id).run();return json({ok:true});
@@ -1082,7 +1082,9 @@ async function confirmMatch(route,request,env){
       const ownClub=canHome?Number(m.home_club_id):Number(m.away_club_id);if(Number(submission?.club_id)===ownClub)return fail('Das Ergebnis muss vom Gegner oder Admin bestätigt werden.',403);
     }
   }
-  await db.prepare(`UPDATE matches SET status='CONFIRMED',confirmed_by=?,updated_at=datetime('now') WHERE id=?`).bind(u.id,id).run();await awardMatchCoins(db,m);return json({ok:true,status:'CONFIRMED'});
+  await db.prepare(`UPDATE matches SET status='CONFIRMED',confirmed_by=?,updated_at=datetime('now') WHERE id=?`).bind(u.id,id).run();await awardMatchCoins(db,m);
+  const confirmedPlayers=(await db.prepare(`SELECT DISTINCT user_id FROM player_stats WHERE match_id=?`).bind(id).all()).results||[];for(const row of confirmedPlayers){try{await evaluateAchievements(db,row.user_id);await syncAutomaticAwards(db,row.user_id,true)}catch{}}
+  return json({ok:true,status:'CONFIRMED'});
 }
 
 async function setupProfile(request,env){
@@ -1279,7 +1281,9 @@ async function adminClubCoinAward(request,env){
 
 async function adminSeasonSave(request,env){
   const db=requireDb(env);await requireAdminPermission(request,env,'leagues');const b=await request.json(),id=asId(b.id),name=cleanText(b.name,80),status=['DRAFT','REGISTRATION','ACTIVE','FINISHED'].includes(b.status)?b.status:'DRAFT';if(!name)return fail('Saisonname fehlt.');
-  if(id)await db.prepare('UPDATE seasons SET name=?,status=?,starts_at=?,ends_at=? WHERE id=?').bind(name,status,b.startsAt||null,b.endsAt||null,id).run();else await db.prepare('INSERT INTO seasons(name,status,starts_at,ends_at) VALUES(?,?,?,?)').bind(name,status,b.startsAt||null,b.endsAt||null).run();return json({ok:true});
+  if(id)await db.prepare('UPDATE seasons SET name=?,status=?,starts_at=?,ends_at=? WHERE id=?').bind(name,status,b.startsAt||null,b.endsAt||null,id).run();else await db.prepare('INSERT INTO seasons(name,status,starts_at,ends_at) VALUES(?,?,?,?)').bind(name,status,b.startsAt||null,b.endsAt||null).run();
+  if(id&&status==='FINISHED'){const users=(await db.prepare(`SELECT DISTINCT ps.user_id FROM player_stats ps JOIN matches m ON m.id=ps.match_id WHERE m.season_id=?`).bind(id).all()).results||[];for(const row of users){try{await evaluateAchievements(db,row.user_id);await syncAutomaticAwards(db,row.user_id,true)}catch{}}}
+  return json({ok:true});
 }
 async function adminDivisionSave(request,env){
   const db=requireDb(env);await requireAdminPermission(request,env,'leagues');const b=await request.json(),id=asId(b.id),seasonId=asId(b.seasonId),name=cleanText(b.name,80),level=Math.max(1,Math.trunc(Number(b.level)||1)),maxClubs=Math.max(2,Math.min(64,Math.trunc(Number(b.maxClubs)||16)));if(!seasonId||!name)return fail('Saison und Ligename fehlen.');
@@ -1287,8 +1291,8 @@ async function adminDivisionSave(request,env){
 }
 async function adminDivisionDelete(request,env){
   const db=requireDb(env);await requireAdminPermission(request,env,'leagues');const b=await request.json(),id=asId(b.id);if(!id)return fail('Liga fehlt.');const d=await db.prepare(`SELECT d.id,d.name,(SELECT COUNT(*) FROM matches WHERE division_id=d.id) matches_count FROM divisions d WHERE d.id=?`).bind(id).first();if(!d)return fail('Liga nicht gefunden.',404);
-  const matches=await db.prepare(`SELECT id FROM matches WHERE division_id=?`).bind(id).all();for(const m of matches.results||[])await reverseMatchAwards(db,m.id);
-  await db.batch([db.prepare(`UPDATE clubs SET division_id=NULL,updated_at=datetime('now') WHERE division_id=?`).bind(id),db.prepare(`DELETE FROM divisions WHERE id=?`).bind(id)]);return json({ok:true,name:d.name,deletedMatches:Number(d.matches_count||0)});
+  const affected=(await db.prepare(`SELECT DISTINCT ps.user_id FROM player_stats ps JOIN matches m ON m.id=ps.match_id WHERE m.division_id=?`).bind(id).all()).results||[];const matches=await db.prepare(`SELECT id FROM matches WHERE division_id=?`).bind(id).all();for(const m of matches.results||[])await reverseMatchAwards(db,m.id);
+  await db.batch([db.prepare(`UPDATE clubs SET division_id=NULL,updated_at=datetime('now') WHERE division_id=?`).bind(id),db.prepare(`DELETE FROM divisions WHERE id=?`).bind(id)]);for(const row of affected){try{await syncAutomaticAwards(db,row.user_id,false)}catch{}}return json({ok:true,name:d.name,deletedMatches:Number(d.matches_count||0)});
 }
 async function reverseMatchAwards(db,matchId){
   const tx=await db.prepare(`SELECT id,user_id,amount FROM coin_transactions WHERE type='PERFORMANCE' AND reference_type='MATCH' AND reference_id=?`).bind(String(matchId)).all();for(const x of tx.results||[]){await db.prepare(`UPDATE coin_wallets SET balance=MAX(0,balance-?),lifetime_earned=MAX(0,lifetime_earned-?),updated_at=datetime('now') WHERE user_id=?`).bind(Math.max(0,Number(x.amount||0)),Math.max(0,Number(x.amount||0)),x.user_id).run();await db.prepare('DELETE FROM coin_transactions WHERE id=?').bind(x.id).run();}
@@ -1296,10 +1300,10 @@ async function reverseMatchAwards(db,matchId){
   const reps=await db.prepare(`SELECT id,club_id,amount FROM club_reputation_events WHERE reference_type='MATCH' AND reference_id=?`).bind(String(matchId)).all();for(const x of reps.results||[]){await db.prepare(`UPDATE clubs SET reputation=MAX(0,reputation-?) WHERE id=?`).bind(Math.max(0,Number(x.amount||0)),x.club_id).run();await db.prepare('DELETE FROM club_reputation_events WHERE id=?').bind(x.id).run();}
 }
 async function adminResetMatchResult(request,env){
-  const db=requireDb(env);await requireAdminPermission(request,env,'matches');const b=await request.json(),id=asId(b.matchId);if(!id)return fail('Match fehlt.');const m=await db.prepare('SELECT id FROM matches WHERE id=?').bind(id).first();if(!m)return fail('Match nicht gefunden.',404);await reverseMatchAwards(db,id);await db.batch([db.prepare('DELETE FROM player_stats WHERE match_id=?').bind(id),db.prepare('DELETE FROM match_club_submissions WHERE match_id=?').bind(id),db.prepare(`UPDATE matches SET home_score=NULL,away_score=NULL,status='SCHEDULED',submitted_by=NULL,confirmed_by=NULL,notes=NULL,updated_at=datetime('now') WHERE id=?`).bind(id)]);return json({ok:true});
+  const db=requireDb(env);await requireAdminPermission(request,env,'matches');const b=await request.json(),id=asId(b.matchId);if(!id)return fail('Match fehlt.');const m=await db.prepare('SELECT id FROM matches WHERE id=?').bind(id).first();if(!m)return fail('Match nicht gefunden.',404);const affected=(await db.prepare(`SELECT DISTINCT user_id FROM player_stats WHERE match_id=?`).bind(id).all()).results||[];await reverseMatchAwards(db,id);await db.batch([db.prepare('DELETE FROM player_stats WHERE match_id=?').bind(id),db.prepare('DELETE FROM match_club_submissions WHERE match_id=?').bind(id),db.prepare(`UPDATE matches SET home_score=NULL,away_score=NULL,status='SCHEDULED',submitted_by=NULL,confirmed_by=NULL,notes=NULL,updated_at=datetime('now') WHERE id=?`).bind(id)]);for(const row of affected){try{await syncAutomaticAwards(db,row.user_id,false)}catch{}}return json({ok:true});
 }
 async function adminResetSchedule(request,env){
-  const db=requireDb(env);await requireAdminPermission(request,env,'matches');const b=await request.json(),seasonId=asId(b.seasonId),divisionId=asId(b.divisionId);if(!seasonId||!divisionId)return fail('Saison und Liga sind erforderlich.');const rows=await db.prepare(`SELECT id FROM matches WHERE season_id=? AND division_id=?`).bind(seasonId,divisionId).all();for(const m of rows.results||[])await reverseMatchAwards(db,m.id);await db.prepare(`DELETE FROM matches WHERE season_id=? AND division_id=?`).bind(seasonId,divisionId).run();return json({ok:true,deleted:(rows.results||[]).length});
+  const db=requireDb(env);await requireAdminPermission(request,env,'matches');const b=await request.json(),seasonId=asId(b.seasonId),divisionId=asId(b.divisionId);if(!seasonId||!divisionId)return fail('Saison und Liga sind erforderlich.');const affected=(await db.prepare(`SELECT DISTINCT ps.user_id FROM player_stats ps JOIN matches m ON m.id=ps.match_id WHERE m.season_id=? AND m.division_id=?`).bind(seasonId,divisionId).all()).results||[];const rows=await db.prepare(`SELECT id FROM matches WHERE season_id=? AND division_id=?`).bind(seasonId,divisionId).all();for(const m of rows.results||[])await reverseMatchAwards(db,m.id);await db.prepare(`DELETE FROM matches WHERE season_id=? AND division_id=?`).bind(seasonId,divisionId).run();for(const row of affected){try{await syncAutomaticAwards(db,row.user_id,false)}catch{}}return json({ok:true,deleted:(rows.results||[]).length});
 }
 
 async function adminMatchSave(request,env){
@@ -1363,7 +1367,7 @@ async function adminMatchDetail(request,env){
 }
 async function adminMatchResult(request,env){
   const db=requireDb(env),admin=await requireAdminPermission(request,env,'matches'),b=await request.json(),id=asId(b.matchId),hs=Math.trunc(Number(b.homeScore)),as=Math.trunc(Number(b.awayScore));if(!id||hs<0||as<0||hs>99||as>99)return fail('Ungültiges Ergebnis.');
-  const m=await db.prepare('SELECT * FROM matches WHERE id=?').bind(id).first();if(!m)return fail('Match nicht gefunden.',404);const wasConfirmed=m.status==='CONFIRMED',stats=Array.isArray(b.stats)?b.stats:[];
+  const m=await db.prepare('SELECT * FROM matches WHERE id=?').bind(id).first();if(!m)return fail('Match nicht gefunden.',404);const previousUsers=(await db.prepare(`SELECT DISTINCT user_id FROM player_stats WHERE match_id=?`).bind(id).all()).results||[],wasConfirmed=m.status==='CONFIRMED',stats=Array.isArray(b.stats)?b.stats:[];
   const motmCount=stats.filter(x=>x&&x.played&&x.motm).length;if(motmCount>1)return fail('Es kann pro Match nur einen Man of the Match geben.',409);
   for(const clubId of [Number(m.home_club_id),Number(m.away_club_id)]){const own=stats.filter(x=>Number(x?.clubId)===clubId);if(own.some(x=>x&&x.played))await validateOfficialLineup(db,own,clubId);}
   const statStmts=[];
@@ -1376,7 +1380,7 @@ async function adminMatchResult(request,env){
   for(let i=0;i<statStmts.length;i+=40)await db.batch(statStmts.slice(i,i+40));
   await db.prepare(`UPDATE matches SET home_score=?,away_score=?,status='CONFIRMED',confirmed_by=?,notes=?,updated_at=datetime('now') WHERE id=?`).bind(hs,as,admin.id,cleanText(b.notes,500),id).run();
   if(!wasConfirmed)await awardMatchCoins(db,{...m,home_score:hs,away_score:as});
-  const playedUsers=[...new Set(stats.filter(x=>x&&x.played&&asId(x.userId)).map(x=>asId(x.userId)))];for(const uid of playedUsers){try{await evaluateAchievements(db,uid);const mv=await marketRowForUser(db,uid);if(mv){const value=marketValueFromRow(mv),last=await db.prepare(`SELECT value_eur FROM market_value_snapshots WHERE user_id=? ORDER BY id DESC LIMIT 1`).bind(uid).first();if(!last||Number(last.value_eur)!==value)await db.prepare(`INSERT INTO market_value_snapshots(user_id,value_eur,reason) VALUES(?,?,'MATCH_CONFIRMED')`).bind(uid,value).run();}}catch{}}
+  const playedUsers=[...new Set([...previousUsers.map(x=>asId(x.user_id)),...stats.filter(x=>x&&asId(x.userId)).map(x=>asId(x.userId))].filter(Boolean))];for(const uid of playedUsers){try{await evaluateAchievements(db,uid);await syncAutomaticAwards(db,uid,true);const mv=await marketRowForUser(db,uid);if(mv){const value=marketValueFromRow(mv),last=await db.prepare(`SELECT value_eur FROM market_value_snapshots WHERE user_id=? ORDER BY id DESC LIMIT 1`).bind(uid).first();if(!last||Number(last.value_eur)!==value)await db.prepare(`INSERT INTO market_value_snapshots(user_id,value_eur,reason) VALUES(?,?,'MATCH_CONFIRMED')`).bind(uid,value).run();}}catch{}}
   return json({ok:true});
 }
 async function adminNewsSave(request,env){
@@ -1497,7 +1501,9 @@ async function managerMatchStatsBatch(request,env){
   const stmts=[];
   for(const row of rows){const userId=asId(row.userId);if(!userId)continue;const member=await db.prepare('SELECT 1 FROM club_members WHERE club_id=? AND user_id=? AND left_at IS NULL').bind(clubId,userId).first();if(!member)return fail('Ein ausgewählter Spieler gehört nicht zu deinem Club.',409);if(!row.played){stmts.push(db.prepare('DELETE FROM player_stats WHERE match_id=? AND user_id=?').bind(matchId,userId));continue;}stmts.push(db.prepare(`INSERT INTO player_stats(match_id,user_id,club_id,goals,assists,saves,clean_sheet,yellow_cards,red_cards,rating,motm) VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(match_id,user_id) DO UPDATE SET club_id=excluded.club_id,goals=excluded.goals,assists=excluded.assists,saves=excluded.saves,clean_sheet=excluded.clean_sheet,yellow_cards=excluded.yellow_cards,red_cards=excluded.red_cards,rating=excluded.rating,motm=excluded.motm`).bind(matchId,userId,clubId,Math.max(0,Math.trunc(Number(row.goals)||0)),Math.max(0,Math.trunc(Number(row.assists)||0)),Math.max(0,Math.trunc(Number(row.saves)||0)),bool01(row.cleanSheet),Math.max(0,Math.min(2,Math.trunc(Number(row.yellowCards)||0))),Math.max(0,Math.min(1,Math.trunc(Number(row.redCards)||0))),Math.max(0,Math.min(10,Number(row.rating)||0)),bool01(row.motm)));}
   stmts.push(db.prepare(`INSERT INTO match_club_submissions(match_id,club_id,submitted_by,stats_submitted_at,evidence_keep_until,updated_at) VALUES(?,?,?,datetime('now'),datetime('now','+7 days'),datetime('now')) ON CONFLICT(match_id,club_id) DO UPDATE SET submitted_by=excluded.submitted_by,stats_submitted_at=excluded.stats_submitted_at,evidence_keep_until=datetime('now','+7 days'),updated_at=datetime('now')`).bind(matchId,clubId,u.id));
-  for(let i=0;i<stmts.length;i+=40)await db.batch(stmts.slice(i,i+40));return json({ok:true,clubId});
+  for(let i=0;i<stmts.length;i+=40)await db.batch(stmts.slice(i,i+40));
+  if(m.status==='CONFIRMED'){const touched=[...new Set(rows.filter(x=>x&&asId(x.userId)).map(x=>asId(x.userId)))];for(const uid of touched){try{await evaluateAchievements(db,uid);await syncAutomaticAwards(db,uid,true)}catch{}}}
+  return json({ok:true,clubId});
 }
 
 async function managerMatchStats(request,env){
@@ -1505,7 +1511,9 @@ async function managerMatchStats(request,env){
   let clubId=null;if(await canClubPermission(db,u,m.home_club_id,'manage_stats'))clubId=m.home_club_id;else if(await canClubPermission(db,u,m.away_club_id,'manage_stats'))clubId=m.away_club_id;else return fail('Keine Statistik-Rechte für dieses Match.',403);
   const member=await db.prepare('SELECT 1 FROM club_members WHERE club_id=? AND user_id=? AND left_at IS NULL').bind(clubId,userId).first();if(!member)return fail('Spieler gehört nicht zum Club.',409);
   const goals=Math.max(0,Math.min(99,Math.trunc(Number(b.goals)||0))),assists=Math.max(0,Math.min(99,Math.trunc(Number(b.assists)||0))),saves=Math.max(0,Math.min(99,Math.trunc(Number(b.saves)||0))),rating=Math.max(0,Math.min(10,Number(b.rating)||0));
-  await db.prepare(`INSERT INTO player_stats(match_id,user_id,club_id,goals,assists,saves,clean_sheet,yellow_cards,red_cards,rating,motm) VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(match_id,user_id) DO UPDATE SET club_id=excluded.club_id,goals=excluded.goals,assists=excluded.assists,saves=excluded.saves,clean_sheet=excluded.clean_sheet,yellow_cards=excluded.yellow_cards,red_cards=excluded.red_cards,rating=excluded.rating,motm=excluded.motm`).bind(matchId,userId,clubId,goals,assists,saves,bool01(b.cleanSheet),Math.max(0,Math.min(2,Math.trunc(Number(b.yellowCards)||0))),Math.max(0,Math.min(1,Math.trunc(Number(b.redCards)||0))),rating,bool01(b.motm)).run();return json({ok:true});
+  await db.prepare(`INSERT INTO player_stats(match_id,user_id,club_id,goals,assists,saves,clean_sheet,yellow_cards,red_cards,rating,motm) VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(match_id,user_id) DO UPDATE SET club_id=excluded.club_id,goals=excluded.goals,assists=excluded.assists,saves=excluded.saves,clean_sheet=excluded.clean_sheet,yellow_cards=excluded.yellow_cards,red_cards=excluded.red_cards,rating=excluded.rating,motm=excluded.motm`).bind(matchId,userId,clubId,goals,assists,saves,bool01(b.cleanSheet),Math.max(0,Math.min(2,Math.trunc(Number(b.yellowCards)||0))),Math.max(0,Math.min(1,Math.trunc(Number(b.redCards)||0))),rating,bool01(b.motm)).run();
+  if(m.status==='CONFIRMED'){try{await evaluateAchievements(db,userId);await syncAutomaticAwards(db,userId,true)}catch{}}
+  return json({ok:true});
 }
 
 async function giftCoins(request,env){
@@ -1598,15 +1606,129 @@ async function marketRowForUser(db,userId){
     FROM users u LEFT JOIN profiles p ON p.user_id=u.id LEFT JOIN club_members cm ON cm.user_id=u.id AND cm.left_at IS NULL LEFT JOIN clubs c ON c.id=cm.club_id LEFT JOIN divisions d ON d.id=c.division_id
     LEFT JOIN player_stats ps ON ps.user_id=u.id LEFT JOIN matches m ON m.id=ps.match_id WHERE u.id=? GROUP BY u.id`).bind(userId).first();
 }
+async function automaticAwardCounts(db,userId){
+  const counts={
+    'Masterclass':0,'Seasoned':0,'Back to Back':0,'Unbeatable':0,'On Fire':0,'Hat-Trick Hero':0,'Poker Face':0,'Old Guard':0,
+    'Dominant':0,'Assist Streak':0,'Fortress Run':0,'Consistency':0,'Promoted':0,'Perfect Start':0,'Survivor':0,
+    'Defensive Masterclass':0,'Ice Cold':0,'Assist King':0,'Clean Sheet King':0,'MVP':0,'TOTW':0,'Keeper of the Year':0,'Invincibles':0,
+    'EPL MOTM':0,'EPL Meister':0
+  };
+  const profile=await db.prepare(`SELECT position FROM profiles WHERE user_id=?`).bind(userId).first();
+  const position=String(profile?.position||'').toUpperCase(),isDefender=['IV','LV','RV'].includes(position);
+  const games=(await db.prepare(`SELECT ps.match_id,ps.club_id,ps.goals,ps.assists,ps.saves,ps.clean_sheet,ps.rating,ps.motm,m.season_id,m.matchday,m.home_club_id,m.away_club_id,m.home_score,m.away_score,m.scheduled_at,m.created_at
+    FROM player_stats ps JOIN matches m ON m.id=ps.match_id WHERE ps.user_id=? AND m.status='CONFIRMED'
+    ORDER BY COALESCE(NULLIF(m.scheduled_at,''),m.created_at),m.id`).bind(userId).all()).results||[];
+  let scoring=0,assistStreak=0,cleanStreak=0,ratingStreak=0,winStreak=0;
+  for(const g of games){
+    const goals=Number(g.goals||0),assists=Number(g.assists||0),clean=Number(g.clean_sheet||0)>0,rating=Number(g.rating||0),motm=Number(g.motm||0)>0;
+    const ownHome=Number(g.club_id)===Number(g.home_club_id),own=ownHome?Number(g.home_score||0):Number(g.away_score||0),opp=ownHome?Number(g.away_score||0):Number(g.home_score||0),win=own>opp;
+    if(goals>=1&&assists>=2)counts['Masterclass']++;
+    if(goals===3)counts['Hat-Trick Hero']++;
+    else if(goals===4)counts['Poker Face']++;
+    else if(goals>=5)counts['Ice Cold']++;
+    if(motm){counts['EPL MOTM']++;if(isDefender)counts['Defensive Masterclass']++;}
+    scoring=goals>0?scoring+1:0;if(scoring>0&&scoring%3===0)counts['On Fire']++;
+    assistStreak=assists>0?assistStreak+1:0;if(assistStreak>0&&assistStreak%5===0)counts['Assist Streak']++;
+    cleanStreak=clean?cleanStreak+1:0;if(cleanStreak>0&&cleanStreak%3===0)counts['Unbeatable']++;if(cleanStreak>0&&cleanStreak%5===0)counts['Fortress Run']++;
+    ratingStreak=rating>=8?ratingStreak+1:0;if(ratingStreak>0&&ratingStreak%5===0)counts['Consistency']++;
+    winStreak=win?winStreak+1:0;if(winStreak>0&&winStreak%5===0)counts['Dominant']++;
+  }
+  const participation=(await db.prepare(`SELECT DISTINCT m.season_id,ps.club_id,d.level,s.status FROM player_stats ps JOIN matches m ON m.id=ps.match_id JOIN seasons s ON s.id=m.season_id JOIN divisions d ON d.id=m.division_id WHERE ps.user_id=? AND m.status='CONFIRMED' ORDER BY m.season_id,ps.club_id`).bind(userId).all()).results||[];
+  const seasonsPlayed=new Set(participation.map(x=>Number(x.season_id)));counts['Seasoned']=seasonsPlayed.size>=2?1:0;counts['Old Guard']=seasonsPlayed.size>=5?1:0;
+  const totw=await db.prepare(`SELECT COUNT(*) count FROM totw_selections WHERE user_id=?`).bind(userId).first();counts['TOTW']=Number(totw?.count||0);
+
+  const leaders=(await db.prepare(`WITH totals AS (
+      SELECT m.season_id,ps.user_id,COUNT(DISTINCT ps.match_id) matches,COALESCE(SUM(ps.assists),0) assists,COALESCE(SUM(ps.clean_sheet),0) clean_sheets,COALESCE(SUM(ps.motm),0) motm,COALESCE(SUM(ps.saves),0) saves,COALESCE(AVG(ps.rating),0) rating,MAX(CASE WHEN p.position='TW' THEN 1 ELSE 0 END) is_gk
+      FROM player_stats ps JOIN matches m ON m.id=ps.match_id JOIN seasons s ON s.id=m.season_id LEFT JOIN profiles p ON p.user_id=ps.user_id
+      WHERE m.status='CONFIRMED' AND s.status='FINISHED' GROUP BY m.season_id,ps.user_id
+    ), maxima AS (
+      SELECT season_id,MAX(assists) max_assists,MAX(clean_sheets) max_clean_sheets,MAX(motm) max_motm FROM totals GROUP BY season_id
+    ), keeper_rank AS (
+      SELECT season_id,user_id,ROW_NUMBER() OVER(PARTITION BY season_id ORDER BY rating DESC,clean_sheets DESC,saves DESC,user_id) rn FROM totals WHERE is_gk=1 AND matches>=3
+    )
+    SELECT t.season_id,t.assists,t.clean_sheets,t.motm,
+      CASE WHEN t.assists=mx.max_assists AND mx.max_assists>0 THEN 1 ELSE 0 END assist_king,
+      CASE WHEN t.clean_sheets=mx.max_clean_sheets AND mx.max_clean_sheets>0 THEN 1 ELSE 0 END clean_king,
+      CASE WHEN t.motm=mx.max_motm AND mx.max_motm>0 THEN 1 ELSE 0 END mvp,
+      CASE WHEN kr.rn=1 THEN 1 ELSE 0 END keeper_year
+    FROM totals t JOIN maxima mx ON mx.season_id=t.season_id LEFT JOIN keeper_rank kr ON kr.season_id=t.season_id AND kr.user_id=t.user_id WHERE t.user_id=?`).bind(userId).all()).results||[];
+  counts['Assist King']=leaders.filter(x=>Number(x.assist_king)).length;counts['Clean Sheet King']=leaders.filter(x=>Number(x.clean_king)).length;counts['MVP']=leaders.filter(x=>Number(x.mvp)).length;counts['Keeper of the Year']=leaders.filter(x=>Number(x.keeper_year)).length;
+
+  const standings=(await db.prepare(`WITH club_results AS (
+      SELECT sc.season_id,sc.division_id,d.level,sc.club_id,COALESCE(sc.points_adjustment,0) points_adjustment,
+        COUNT(m.id) played,
+        COALESCE(SUM(CASE WHEN (m.home_club_id=sc.club_id AND m.home_score>m.away_score) OR (m.away_club_id=sc.club_id AND m.away_score>m.home_score) THEN 1 ELSE 0 END),0) wins,
+        COALESCE(SUM(CASE WHEN m.id IS NOT NULL AND m.home_score=m.away_score THEN 1 ELSE 0 END),0) draws,
+        COALESCE(SUM(CASE WHEN (m.home_club_id=sc.club_id AND m.home_score<m.away_score) OR (m.away_club_id=sc.club_id AND m.away_score<m.home_score) THEN 1 ELSE 0 END),0) losses,
+        COALESCE(SUM(CASE WHEN m.home_club_id=sc.club_id THEN m.home_score WHEN m.away_club_id=sc.club_id THEN m.away_score ELSE 0 END),0) gf,
+        COALESCE(SUM(CASE WHEN m.home_club_id=sc.club_id THEN m.away_score WHEN m.away_club_id=sc.club_id THEN m.home_score ELSE 0 END),0) ga
+      FROM season_clubs sc JOIN divisions d ON d.id=sc.division_id JOIN seasons s ON s.id=sc.season_id
+      LEFT JOIN matches m ON m.season_id=sc.season_id AND m.division_id=sc.division_id AND (m.home_club_id=sc.club_id OR m.away_club_id=sc.club_id) AND m.status='CONFIRMED'
+      WHERE s.status='FINISHED' GROUP BY sc.season_id,sc.division_id,d.level,sc.club_id,sc.points_adjustment
+    ), ranked AS (
+      SELECT *,ROW_NUMBER() OVER(PARTITION BY season_id,division_id ORDER BY (wins*3+draws+points_adjustment) DESC,(gf-ga) DESC,gf DESC,club_id) position,
+        COUNT(*) OVER(PARTITION BY season_id,division_id) team_count FROM club_results
+    ) SELECT * FROM ranked ORDER BY season_id,level,position`).all()).results||[];
+  const standingMap=new Map(standings.map(x=>[`${Number(x.season_id)}:${Number(x.club_id)}`,x]));
+  const finishedSeasonIds=((await db.prepare(`SELECT id FROM seasons WHERE status='FINISHED' ORDER BY id`).all()).results||[]).map(x=>Number(x.id));
+  const userChampionSeasons=new Set();
+  for(const pc of participation){
+    if(pc.status!=='FINISHED')continue;const row=standingMap.get(`${Number(pc.season_id)}:${Number(pc.club_id)}`);if(!row)continue;
+    if(Number(row.level)===1&&Number(row.position)===1)userChampionSeasons.add(Number(pc.season_id));
+    if(Number(row.played)>0&&Number(row.losses)===0)counts['Invincibles']++;
+  }
+  counts['EPL Meister']=userChampionSeasons.size;
+  for(let i=1;i<finishedSeasonIds.length;i++)if(userChampionSeasons.has(finishedSeasonIds[i-1])&&userChampionSeasons.has(finishedSeasonIds[i]))counts['Back to Back']++;
+
+  const memberships=(await db.prepare(`SELECT sc.season_id,sc.club_id,d.level,s.status FROM season_clubs sc JOIN divisions d ON d.id=sc.division_id JOIN seasons s ON s.id=sc.season_id ORDER BY sc.club_id,sc.season_id`).all()).results||[];
+  for(const pc of participation){
+    if(pc.status==='FINISHED'){
+      const next=memberships.find(x=>Number(x.club_id)===Number(pc.club_id)&&Number(x.season_id)>Number(pc.season_id));
+      if(next){
+        if(Number(next.level)<Number(pc.level))counts['Promoted']++;
+        const row=standingMap.get(`${Number(pc.season_id)}:${Number(pc.club_id)}`);if(row&&Number(next.level)===Number(pc.level)&&Number(row.team_count)>=3&&Number(row.position)>Math.floor(Number(row.team_count)*2/3))counts['Survivor']++;
+      }
+    }
+    const firstFive=(await db.prepare(`SELECT m.id,m.status,m.home_club_id,m.away_club_id,m.home_score,m.away_score,
+        EXISTS(SELECT 1 FROM player_stats px WHERE px.match_id=m.id AND px.user_id=? AND px.club_id=?) player_played
+      FROM matches m WHERE m.season_id=? AND (m.home_club_id=? OR m.away_club_id=?)
+      ORDER BY COALESCE(m.matchday,9999),COALESCE(NULLIF(m.scheduled_at,''),m.created_at),m.id LIMIT 5`).bind(userId,pc.club_id,pc.season_id,pc.club_id,pc.club_id).all()).results||[];
+    if(firstFive.length===5&&firstFive.every(g=>g.status==='CONFIRMED'&&Number(g.player_played)===1&&((Number(g.home_club_id)===Number(pc.club_id)&&Number(g.home_score)>Number(g.away_score))||(Number(g.away_club_id)===Number(pc.club_id)&&Number(g.away_score)>Number(g.home_score)))))counts['Perfect Start']++;
+  }
+  return counts;
+}
+async function setAutomaticAwardQuantity(db,userId,trophy,name,desired,notifyNew=false){
+  desired=Math.max(0,Math.trunc(Number(desired)||0));const row=await db.prepare(`SELECT quantity,COALESCE(automatic_quantity,0) automatic_quantity FROM user_trophies WHERE user_id=? AND trophy_id=?`).bind(userId,trophy.id).first();
+  const oldAuto=Number(row?.automatic_quantity||0),oldTotal=Number(row?.quantity||0),manual=Math.max(0,oldTotal-oldAuto),nextTotal=manual+desired;
+  if(!row&&nextTotal>0)await db.prepare(`INSERT INTO user_trophies(user_id,trophy_id,quantity,automatic_quantity,awarded_at) VALUES(?,?,?,?,datetime('now'))`).bind(userId,trophy.id,nextTotal,desired).run();
+  else if(row&&nextTotal<=0)await db.prepare(`DELETE FROM user_trophies WHERE user_id=? AND trophy_id=?`).bind(userId,trophy.id).run();
+  else if(row)await db.prepare(`UPDATE user_trophies SET quantity=?,automatic_quantity=?,awarded_at=CASE WHEN ?>automatic_quantity THEN datetime('now') ELSE awarded_at END WHERE user_id=? AND trophy_id=?`).bind(nextTotal,desired,desired,userId,trophy.id).run();
+  if(notifyNew&&desired>oldAuto)await notifyUser(db,userId,'AWARD',`${name} erhalten`,`${desired-oldAuto>1?`${desired-oldAuto} neue Auszeichnungen`:'Neue Auszeichnung'} • Gesamt: x${nextTotal}`,'/erfolge');
+  return nextTotal;
+}
+async function syncAutomaticAwards(db,userId,notifyNew=false){
+  const counts=await automaticAwardCounts(db,userId),rows=(await db.prepare(`SELECT id,name FROM trophies`).all()).results||[],byName=new Map(rows.map(x=>[x.name,x]));
+  for(const [name,desired] of Object.entries(counts)){const trophy=byName.get(name);if(trophy)await setAutomaticAwardQuantity(db,userId,trophy,name,desired,notifyNew);}
+  return counts;
+}
 async function achievementMetrics(db,userId){
-  const agg=await db.prepare(`SELECT COUNT(DISTINCT ps.match_id) matches,COALESCE(SUM(ps.goals),0) goals,COALESCE(SUM(ps.assists),0) assists,COALESCE(SUM(ps.clean_sheet),0) clean_sheets FROM player_stats ps JOIN matches m ON m.id=ps.match_id WHERE ps.user_id=? AND m.status='CONFIRMED'`).bind(userId).first();
+  const agg=await db.prepare(`SELECT COUNT(DISTINCT ps.match_id) matches,COALESCE(SUM(ps.goals),0) goals,COALESCE(SUM(ps.assists),0) assists,COALESCE(SUM(ps.saves),0) saves,COALESCE(SUM(ps.clean_sheet),0) clean_sheets FROM player_stats ps JOIN matches m ON m.id=ps.match_id WHERE ps.user_id=? AND m.status='CONFIRMED'`).bind(userId).first();
+  const profile=await db.prepare(`SELECT position FROM profiles WHERE user_id=?`).bind(userId).first(),isGK=String(profile?.position||'').toUpperCase()==='TW';
   const oneClub=await db.prepare(`SELECT MAX(cnt) value FROM (SELECT ps.club_id,COUNT(DISTINCT ps.match_id) cnt FROM player_stats ps JOIN matches m ON m.id=ps.match_id WHERE ps.user_id=? AND m.status='CONFIRMED' GROUP BY ps.club_id)`).bind(userId).first();
   const seasonsClub=await db.prepare(`SELECT MAX(cnt) value FROM (SELECT ps.club_id,COUNT(DISTINCT m.season_id) cnt FROM player_stats ps JOIN matches m ON m.id=ps.match_id WHERE ps.user_id=? AND m.status='CONFIRMED' GROUP BY ps.club_id)`).bind(userId).first();
   const rival=await db.prepare(`SELECT MAX(g) value FROM (SELECT CASE WHEN m.home_club_id=ps.club_id THEN m.away_club_id ELSE m.home_club_id END opponent,SUM(ps.goals) g FROM player_stats ps JOIN matches m ON m.id=ps.match_id WHERE ps.user_id=? AND m.status='CONFIRMED' GROUP BY opponent)`).bind(userId).first();
-  const games=(await db.prepare(`SELECT ps.club_id,m.home_club_id,m.away_club_id,m.home_score,m.away_score FROM player_stats ps JOIN matches m ON m.id=ps.match_id WHERE ps.user_id=? AND m.status='CONFIRMED' ORDER BY COALESCE(NULLIF(m.scheduled_at,''),m.created_at),m.id`).bind(userId).all()).results||[];
-  let streak=0,best=0;for(const g of games){const own=Number(g.club_id)===Number(g.home_club_id)?Number(g.home_score):Number(g.away_score),opp=Number(g.club_id)===Number(g.home_club_id)?Number(g.away_score):Number(g.home_score);if(own>=opp){streak++;best=Math.max(best,streak)}else streak=0;}
+  const games=(await db.prepare(`SELECT ps.club_id,ps.goals,m.home_club_id,m.away_club_id,m.home_score,m.away_score FROM player_stats ps JOIN matches m ON m.id=ps.match_id WHERE ps.user_id=? AND m.status='CONFIRMED' ORDER BY COALESCE(NULLIF(m.scheduled_at,''),m.created_at),m.id`).bind(userId).all()).results||[];
+  let unbeaten=0,bestUnbeaten=0,scoring=0,bestScoring=0,revenge=0,statement=0;const previousVs=new Map();
+  for(const g of games){const ownHome=Number(g.club_id)===Number(g.home_club_id),oppClub=ownHome?Number(g.away_club_id):Number(g.home_club_id),own=ownHome?Number(g.home_score||0):Number(g.away_score||0),opp=ownHome?Number(g.away_score||0):Number(g.home_score||0),won=own>opp,lost=own<opp;
+    if(own>=opp){unbeaten++;bestUnbeaten=Math.max(bestUnbeaten,unbeaten)}else unbeaten=0;
+    if(Number(g.goals||0)>0){scoring++;bestScoring=Math.max(bestScoring,scoring)}else scoring=0;
+    if(won&&previousVs.get(oppClub)==='LOSS')revenge++;
+    if(won&&own-opp>=5)statement++;
+    previousVs.set(oppClub,lost?'LOSS':won?'WIN':'DRAW');
+  }
   const top=await db.prepare(`WITH totals AS (SELECT m.season_id,ps.user_id,SUM(ps.goals) goals FROM player_stats ps JOIN matches m ON m.id=ps.match_id JOIN seasons s ON s.id=m.season_id WHERE m.status='CONFIRMED' AND s.status='FINISHED' GROUP BY m.season_id,ps.user_id), mx AS (SELECT season_id,MAX(goals) max_goals FROM totals GROUP BY season_id) SELECT COUNT(*) value FROM totals t JOIN mx ON mx.season_id=t.season_id AND mx.max_goals=t.goals WHERE t.user_id=? AND t.goals>0`).bind(userId).first();
-  return {GOALS_TOTAL:Number(agg?.goals||0),ASSISTS_TOTAL:Number(agg?.assists||0),CLEAN_SHEETS:Number(agg?.clean_sheets||0),MATCHES_TOTAL:Number(agg?.matches||0),MATCHES_ONE_CLUB:Number(oneClub?.value||0),SEASONS_SAME_CLUB:Number(seasonsClub?.value||0),UNBEATEN_STREAK:best,GOALS_VS_RIVAL:Number(rival?.value||0),TOP_SCORER:Number(top?.value||0)};
+  const clean=Number(agg?.clean_sheets||0);
+  return {GOALS_TOTAL:Number(agg?.goals||0),ASSISTS_TOTAL:Number(agg?.assists||0),SAVES_TOTAL:Number(agg?.saves||0),CLEAN_SHEETS:clean,FIELD_CLEAN_SHEETS:isGK?0:clean,GK_CLEAN_SHEETS:isGK?clean:0,MATCHES_TOTAL:Number(agg?.matches||0),MATCHES_ONE_CLUB:Number(oneClub?.value||0),SEASONS_SAME_CLUB:Number(seasonsClub?.value||0),UNBEATEN_STREAK:bestUnbeaten,SCORING_STREAK:bestScoring,GOALS_VS_RIVAL:Number(rival?.value||0),TOP_SCORER:Number(top?.value||0),REVENGE_WINS:revenge,STATEMENT_WINS:statement};
 }
 async function evaluateAchievements(db,userId){
   const defs=(await db.prepare(`SELECT * FROM achievement_definitions WHERE active=1 ORDER BY sort_order,id`).all()).results||[],metrics=await achievementMetrics(db,userId),existing=new Set(((await db.prepare(`SELECT achievement_id FROM player_achievement_unlocks WHERE user_id=?`).bind(userId).all()).results||[]).map(x=>Number(x.achievement_id))),unlocked=[];
@@ -1620,6 +1742,7 @@ async function achievementView(db,userId){
 async function getAchievementsOverview(request,env){
   const db=requireDb(env),viewer=await currentUser(request,env),url=new URL(request.url),username=cleanText(url.searchParams.get('username')||viewer?.username||'',40);if(!username)return fail('Bitte anmelden oder einen Benutzernamen angeben.',401);
   const u=await db.prepare(`SELECT id,username FROM users WHERE lower(username)=lower(?)`).bind(username).first();if(!u)return fail('Spieler nicht gefunden.',404);
+  await syncAutomaticAwards(db,u.id,false);
   const [achievements,manual,trophies,catalog,totw]=await Promise.all([achievementView(db,u.id),db.prepare(`SELECT id,title,subtitle,icon_key,awarded_at FROM player_achievements WHERE user_id=? ORDER BY awarded_at DESC`).bind(u.id).all(),db.prepare(`SELECT t.id,t.name,t.icon_key,t.type,ut.quantity,ut.awarded_at FROM user_trophies ut JOIN trophies t ON t.id=ut.trophy_id WHERE ut.user_id=? ORDER BY ut.awarded_at DESC`).bind(u.id).all(),db.prepare(`SELECT id,name,icon_key,type FROM trophies ORDER BY type,name`).all(),db.prepare(`SELECT COUNT(*) count FROM totw_selections WHERE user_id=?`).bind(u.id).first()]);
   return json({player:u,achievements,manual:manual.results||[],trophies:trophies.results||[],trophyCatalog:catalog.results||[],totwCount:Number(totw?.count||0)});
 }
@@ -1668,7 +1791,7 @@ async function adminTotwAward(request,env){
   const played=await db.prepare(`SELECT 1 FROM player_stats ps JOIN matches m ON m.id=ps.match_id WHERE ps.user_id=? AND m.season_id=? AND m.matchday=? AND m.status='CONFIRMED' AND (? IS NULL OR m.division_id=?) LIMIT 1`).bind(userId,seasonId,matchday,divisionId,divisionId).first();if(!played)return fail('TOTW kann nur an Spieler vergeben werden, die in einem bestätigten Match dieses Spieltags Statistiken besitzen.',409);
   const count=await db.prepare(`SELECT COUNT(*) count FROM totw_selections WHERE season_id=? AND COALESCE(division_id,0)=COALESCE(?,0) AND matchday=?`).bind(seasonId,divisionId,matchday).first();if(Number(count?.count||0)>=11)return fail('Für diesen Spieltag wurden bereits 11 TOTW-Spieler ausgewählt.',409);
   const exists=await db.prepare(`SELECT id FROM totw_selections WHERE season_id=? AND COALESCE(division_id,0)=COALESCE(?,0) AND matchday=? AND user_id=?`).bind(seasonId,divisionId,matchday,userId).first();if(exists)return fail('Dieser Spieler ist bereits im TOTW dieses Spieltags.',409);
-  const txRef=`${seasonId}:${divisionId||0}:${matchday}:${userId}`;await db.batch([db.prepare(`INSERT INTO totw_selections(season_id,division_id,matchday,user_id,slot_label,selected_by,expires_at,coins_awarded) VALUES(?,?,?,?,?,?,datetime('now','+7 days'),250)`).bind(seasonId,divisionId,matchday,userId,slot,admin.id),db.prepare(`INSERT OR IGNORE INTO coin_wallets(user_id,balance) VALUES(?,0)`).bind(userId),db.prepare(`UPDATE coin_wallets SET balance=balance+250,lifetime_earned=lifetime_earned+250,updated_at=datetime('now') WHERE user_id=?`).bind(userId),db.prepare(`INSERT OR IGNORE INTO coin_transactions(user_id,amount,type,reference_type,reference_id,description) VALUES(?,250,'ADMIN_ADJUSTMENT','TOTW',?,'EPL Team of the Week – 250 Coins')`).bind(userId,txRef),db.prepare(`INSERT INTO player_achievements(user_id,title,subtitle,icon_key) VALUES(?,?,?,?)`).bind(userId,'EPL Team of the Week',`Spieltag ${matchday} • ${slot}`,'/assets/totw/SpielerDerWocheRahmen.png')]);await notifyUser(db,userId,'TOTW','Du bist im EPL Team of the Week!',`Du erhältst 250 EPL Coins und kannst den exklusiven TOTW-Profilbildrahmen 7 Tage lang ausrüsten.`,'/spieler/'+user.username.toLowerCase());return json({ok:true,username:user.username,expiresInDays:7,coins:250});
+  const txRef=`${seasonId}:${divisionId||0}:${matchday}:${userId}`;await db.batch([db.prepare(`INSERT INTO totw_selections(season_id,division_id,matchday,user_id,slot_label,selected_by,expires_at,coins_awarded) VALUES(?,?,?,?,?,?,datetime('now','+7 days'),250)`).bind(seasonId,divisionId,matchday,userId,slot,admin.id),db.prepare(`INSERT OR IGNORE INTO coin_wallets(user_id,balance) VALUES(?,0)`).bind(userId),db.prepare(`UPDATE coin_wallets SET balance=balance+250,lifetime_earned=lifetime_earned+250,updated_at=datetime('now') WHERE user_id=?`).bind(userId),db.prepare(`INSERT OR IGNORE INTO coin_transactions(user_id,amount,type,reference_type,reference_id,description) VALUES(?,250,'ADMIN_ADJUSTMENT','TOTW',?,'EPL Team of the Week – 250 Coins')`).bind(userId,txRef)]);await syncAutomaticAwards(db,userId,true);await notifyUser(db,userId,'TOTW','Du bist im EPL Team of the Week!',`Du erhältst 250 EPL Coins, das TOTW-Badge wird hochgezählt und du kannst den exklusiven TOTW-Profilbildrahmen 7 Tage lang ausrüsten.`,'/spieler/'+user.username.toLowerCase());return json({ok:true,username:user.username,expiresInDays:7,coins:250});
 }
 
 async function eaClubInfo(request,env){const u=new URL(request.url),clubId=(u.searchParams.get('clubId')||'').trim(),platform=(u.searchParams.get('platform')||'common-gen5').trim();if(!/^\d{1,12}$/.test(clubId))return fail('Ungültige EA Club ID.');if(!['common-gen5','common-gen4'].includes(platform))return fail('Ungültige Plattform.');const target=`https://proclubs.ea.com/api/fc/clubs/info?platform=${encodeURIComponent(platform)}&clubIds=${encodeURIComponent(clubId)}`;const res=await fetch(target,{headers:{accept:'application/json','user-agent':'EPL-Elite-Pro-League/1.0'},signal:AbortSignal.timeout(9000)});if(!res.ok)return fail(`EA Clubs antwortet mit HTTP ${res.status}.`,502);const data=await res.json();return json({provider:'EA Clubs',clubId,platform,data});}
@@ -1683,6 +1806,7 @@ async function getProfile(slug,request,env){
     LEFT JOIN club_members cm ON cm.user_id=u.id AND cm.left_at IS NULL LEFT JOIN clubs c ON c.id=cm.club_id
     WHERE lower(u.username)=?`).bind(slug.toLowerCase()).first();
   if(!p)return fail('Spieler nicht gefunden.',404);
+  await syncAutomaticAwards(db,p.id,false);
   const activeTotw=await db.prepare(`SELECT id,matchday,slot_label,expires_at FROM totw_selections WHERE user_id=? AND expires_at>datetime('now') ORDER BY expires_at DESC LIMIT 1`).bind(p.id).first();
   p.totw_frame_active=!!activeTotw;p.totw_frame_expires_at=activeTotw?.expires_at||null;p.totw_matchday=activeTotw?.matchday||null;
   if(!activeTotw&&Number(p.use_totw_frame)){await db.prepare(`UPDATE profiles SET use_totw_frame=0 WHERE user_id=?`).bind(p.id).run();p.use_totw_frame=0;}
@@ -1708,10 +1832,8 @@ async function getProfile(slug,request,env){
   if(viewer?.id===p.id){const inv=await db.prepare(`SELECT si.id,si.name,si.category,si.description,si.rarity,si.asset_key,si.price_coins,si.price_eur_cents,si.shop_group,si.item_type,si.style_key,si.style_value,ui.acquired_at FROM user_inventory ui JOIN shop_items si ON si.id=ui.item_id WHERE ui.user_id=? ORDER BY ui.acquired_at DESC`).bind(p.id).all();inventory=inv.results||[];}
   const [achievementProgress,career,marketRow,trophyRows,marketHistoryRows]=await Promise.all([achievementView(db,p.id),careerForUser(db,p.id),marketRowForUser(db,p.id),db.prepare(`SELECT t.id,t.name title,('x'||ut.quantity) subtitle,t.icon_key,t.type award_type,ut.quantity,ut.awarded_at FROM user_trophies ut JOIN trophies t ON t.id=ut.trophy_id WHERE ut.user_id=? ORDER BY ut.awarded_at DESC`).bind(p.id).all(),db.prepare(`SELECT value_eur,reason,created_at FROM market_value_snapshots WHERE user_id=? ORDER BY id DESC LIMIT 12`).bind(p.id).all()]);
   const unlockedAuto=achievementProgress.filter(x=>x.unlocked).map(x=>({id:`achievement-${x.id}`,title:x.title,subtitle:x.description,icon_key:x.asset_key,awarded_at:x.unlocked_at,category:x.category}));
-  const totwHistory=await db.prepare(`SELECT COUNT(*) count,MAX(selected_at) awarded_at FROM totw_selections WHERE user_id=?`).bind(p.id).first();
-  const totwAwards=Number(totwHistory?.count||0)>0?[{id:'totw-history',title:'EPL Team of the Week',subtitle:`x${Number(totwHistory.count)}`,icon_key:'/assets/totw/SpielerDerWocheRahmen.png',quantity:Number(totwHistory.count),award_type:'TOTW',awarded_at:totwHistory.awarded_at}]:[];
   p.market_value=marketRow?marketValueFromRow(marketRow):250000;
-  return json({profile:p,stats:stats||{},posts:posts.results||[],recentMatches:recentMatches.results||[],achievements:[...totwAwards,...(trophyRows.results||[]),...unlockedAuto,...(achievements.results||[])],achievementProgress,career,marketHistory:marketHistoryRows.results||[],clubHistory:clubHistory.results||[],inventory,badges:badges.results||[]});
+  return json({profile:p,stats:stats||{},posts:posts.results||[],recentMatches:recentMatches.results||[],achievements:[...(trophyRows.results||[]),...unlockedAuto,...(achievements.results||[])],achievementProgress,career,marketHistory:marketHistoryRows.results||[],clubHistory:clubHistory.results||[],inventory,badges:badges.results||[]});
 }
 async function getClub(slug,request,env){
   const db=requireDb(env),viewer=await currentUser(request,env);
@@ -1962,5 +2084,6 @@ async function adminFinalizeSeason(request,env){
     const progress=await clubGoalMetric(db,g.club_id,seasonId,g.metric),ok=progress>=Number(g.target_value);await db.prepare(`UPDATE club_season_goals SET status=?,progress_value=?,completed_at=CASE WHEN ?='COMPLETED' THEN datetime('now') ELSE NULL END WHERE season_id=? AND club_id=? AND goal_id=?`).bind(ok?'COMPLETED':'FAILED',progress,ok?'COMPLETED':'FAILED',seasonId,g.club_id,g.goal_id).run();
     if(ok){const ref=`${seasonId}:${g.club_id}:${g.goal_id}`,exists=await db.prepare(`SELECT 1 FROM club_coin_transactions WHERE club_id=? AND type='SEASON_GOAL' AND reference_type='SEASON_GOAL_PAYOUT' AND reference_id=?`).bind(g.club_id,ref).first();if(!exists){await db.batch([db.prepare(`INSERT OR IGNORE INTO club_coin_wallets(club_id,balance) VALUES(?,0)`).bind(g.club_id),db.prepare(`UPDATE club_coin_wallets SET balance=balance+?,lifetime_earned=lifetime_earned+?,updated_at=datetime('now') WHERE club_id=?`).bind(g.reward_coins,g.reward_coins,g.club_id),db.prepare(`INSERT INTO club_coin_transactions(club_id,amount,type,reference_type,reference_id,description) VALUES(?,?,'SEASON_GOAL','SEASON_GOAL_PAYOUT',?,?)`).bind(g.club_id,g.reward_coins,ref,`Club-Saisonziel erfolgreich: ${g.title}`)]);await addClubReputation(db,g.club_id,100,'CLUB_SEASON_GOAL','GOAL',ref,`Club-Saisonziel geschafft: ${g.title}`);const mgr=await db.prepare('SELECT manager_user_id FROM clubs WHERE id=?').bind(g.club_id).first();if(mgr?.manager_user_id)await notifyUser(db,mgr.manager_user_id,'CLUB_SEASON_GOAL',`Clubziel geschafft: ${g.title}`,`+${g.reward_coins} EPL Coins für die Clubkasse.`,'/manager');clubAwards++;}}
   }
-  if(b.finishSeason!==false)await db.prepare(`UPDATE seasons SET status='FINISHED' WHERE id=?`).bind(seasonId).run();return json({ok:true,playerAwards,clubAwards});
+  if(b.finishSeason!==false){await db.prepare(`UPDATE seasons SET status='FINISHED' WHERE id=?`).bind(seasonId).run();const users=(await db.prepare(`SELECT DISTINCT ps.user_id FROM player_stats ps JOIN matches m ON m.id=ps.match_id WHERE m.season_id=?`).bind(seasonId).all()).results||[];for(const row of users){try{await evaluateAchievements(db,row.user_id);await syncAutomaticAwards(db,row.user_id,true)}catch{}}}
+  return json({ok:true,playerAwards,clubAwards});
 }
