@@ -716,3 +716,39 @@
 
 /* v18 admin defwin shortcuts */
 .defwin-actions{margin:14px 0;padding:12px 14px;border:1px solid rgba(255,92,92,.28);background:rgba(120,20,30,.12);border-radius:12px;display:flex;gap:12px;align-items:center;justify-content:space-between}.defwin-actions>span{font-size:12px;color:var(--text-soft)}.defwin-actions .action-cell{justify-content:flex-end}@media(max-width:700px){.defwin-actions{align-items:stretch;flex-direction:column}.defwin-actions .action-cell{display:grid;grid-template-columns:1fr;gap:8px}.defwin-actions .btn{width:100%}}
+
+/* =========================================================
+   EPL v21 — stronger desktop UI scale, centered mobile canvas,
+   guest/member navigation separation
+   ========================================================= */
+.member-gate-page{padding:54px 0 70px}.member-gate{max-width:760px;margin:0 auto;padding:42px;text-align:center;background:radial-gradient(circle at 50% 0,rgba(13,135,255,.16),transparent 44%),linear-gradient(180deg,#081421,#050c16)}.member-gate-icon{width:66px;height:66px;margin:0 auto 14px;border:1px solid #28577c;border-radius:18px;display:grid;place-items:center;color:#35b7ff;background:#071827}.member-gate-icon .ui-svg-icon{width:32px;height:32px}.member-gate h1{font-family:Rajdhani,Inter,sans-serif;font-size:42px;margin:7px 0}.member-gate p{max-width:620px;margin:0 auto;color:#aab7c5;font-size:14px;line-height:1.65}.member-gate-actions{display:flex;justify-content:center;gap:10px;flex-wrap:wrap;margin-top:24px}
+
+/* At browser 100% the desktop UI should feel close to the former 125% view. */
+@media(min-width:1101px){
+  body{overflow-x:hidden}
+  .shell{zoom:1.10;width:90.9091%;min-height:90.9091vh}
+  .container{width:min(1580px,calc(100% - 22px))!important}
+  .page-heading{margin-bottom:20px!important}.page-heading h1{font-size:48px!important}.page-heading p{font-size:15px!important;line-height:1.5!important}
+  .simple-page,.table-page{padding-top:30px!important;padding-bottom:30px!important}
+  .panel{border-radius:13px}.data-panel{padding:18px!important}.panel-title{font-size:18px!important}
+  .match-row{font-size:12px!important;min-height:48px!important;padding-top:8px!important;padding-bottom:8px!important}
+  .team-tile,.player-tile{min-height:210px!important;padding:18px!important}.team-logo{width:76px!important;height:76px!important}.team-tile h3,.player-tile h3{font-size:24px!important}.team-stats strong{font-size:23px!important}.team-stats span,.player-mini-stats span{font-size:9px!important}
+  .shop-tab{font-size:12px!important}.product-card{padding:13px!important}.product-card h3{font-size:20px!important}.product-card .ptype{font-size:11px!important}.shop-desc{font-size:11px!important}.price strong{font-size:24px!important}
+  .standings th,.standings td{font-size:13px!important;padding:12px 11px!important}.rule-content p,.rule-content li,.rule-card p{font-size:13px!important;line-height:1.72!important}
+  .field label{font-size:11px!important}.field input,.field select,.field textarea{font-size:14px!important;padding:12px 13px!important}
+}
+
+/* Mobile pages keep a comfortable centered gutter instead of touching screen edges. */
+@media(max-width:760px){
+  body{overflow-x:hidden}
+  .container{width:calc(100% - 30px)!important;max-width:calc(100% - 30px)!important;padding-left:0!important;padding-right:0!important;margin-left:auto!important;margin-right:auto!important}
+  .site-header .container.header-inner{width:100%!important;max-width:100%!important;padding-left:16px!important;padding-right:16px!important;margin:0!important}
+  .simple-page,.table-page{padding-top:18px!important;padding-bottom:24px!important}
+  .page-heading{padding:0 2px!important;margin-bottom:18px!important;gap:10px!important}.page-heading h1{font-size:32px!important;line-height:1.06!important}.page-heading p{font-size:12px!important;line-height:1.5!important;max-width:96%!important}.eyebrow{font-size:15px!important}
+  .matches-split,.teams-grid,.players-grid,.news-grid,.transfer-market,.rules-layout{gap:14px!important}
+  .data-panel,.team-tile,.player-tile,.news-card,.rule-card,.achievement-library-card,.settings-card{border-radius:13px!important}
+  .data-panel{padding:14px!important}.team-tile,.player-tile{padding:15px!important}
+  .team-filter-tabs,.player-filter-tabs,.league-table-tabs,.achievement-category-tabs{margin-left:0!important;margin-right:0!important;padding-left:1px!important;padding-right:1px!important}
+  .member-gate-page{padding-top:30px!important;padding-bottom:30px!important}.member-gate{padding:28px 18px!important;border-radius:14px!important}.member-gate h1{font-size:31px!important}.member-gate p{font-size:12px!important}.member-gate-actions{display:grid!important;grid-template-columns:1fr!important}.member-gate-actions .btn{width:100%!important}
+  .mobile-drawer.open{left:15px!important;right:15px!important}
+}

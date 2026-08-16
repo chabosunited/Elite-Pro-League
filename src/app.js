@@ -242,7 +242,9 @@ window.addEventListener('popstate',route);
 document.addEventListener('click',e=>{const a=e.target.closest('a[data-link]'); if(a){e.preventDefault();goto(a.getAttribute('href'));}});
 
 function layout(content){
-  const nav=[['/','Home'],['/news','News'],['/liga','Liga'],['/tabelle','Tabelle'],['/teams','Teams'],['/spieler','Spieler'],['/transfers','Transfers'],['/shop','Shop'],['/regeln','Regeln']];
+  const publicNav=[['/','Home'],['/news','News'],['/liga','Liga'],['/tabelle','Tabelle'],['/regeln','Regeln']];
+  const memberNav=[['/','Home'],['/news','News'],['/liga','Liga'],['/tabelle','Tabelle'],['/teams','Teams'],['/spieler','Spieler'],['/transfers','Transfers'],['/shop','Shop'],['/regeln','Regeln']];
+  const nav=state.me?memberNav:publicNav;
   const fullEditor=!!(state.me&&(state.me.role==='SUPER_ADMIN'||(state.me.admin_roles||[]).includes('FULL_ADMIN')));
   return `<div class="shell ${state.editMode?'edit-mode-active':''}">
     <header class="site-header"><div class="container header-inner">
@@ -261,7 +263,7 @@ function footer(){const socials=[['discord','Discord','#'],['x','X','#'],['insta
 function mobileDrawer(){
   const link=(href,icon,label,extra='')=>`<a data-link href="${href}" class="mobile-drawer-link">${mobileIcon(icon)}<span>${label}</span>${extra}</a>`;
   const head=`<div class="mobile-drawer-head"><div><small>EPL</small><strong>Navigation</strong></div><button type="button" data-mobile-close aria-label="Menü schließen">${mobileIcon('close')}</button></div>`;
-  if(!state.me)return `<div class="mobile-drawer" id="mobileDrawer">${head}${link('/news','news','News')}${link('/tabelle','table','Tabelle')}${link('/transfers','transfers','Transfers')}${link('/shop','shop','Shop')}${link('/regeln','rules','Regeln')}${link('/login','profile','Login')}</div>`;
+  if(!state.me)return `<div class="mobile-drawer" id="mobileDrawer">${head}${link('/','home','Home')}${link('/news','news','News')}${link('/liga','league','Liga')}${link('/tabelle','table','Tabelle')}${link('/regeln','rules','Regeln')}<div class="mobile-drawer-separator"></div>${link('/login','profile','Anmelden')}${link('/registrieren','player','Registrieren')}</div>`;
   return `<div class="mobile-drawer" id="mobileDrawer">${head}
     ${link('/news','news','News')}${link('/tabelle','table','Tabelle')}${link('/transfers','transfers','Transfers')}${link('/shop','shop','Shop')}${link('/regeln','rules','Regeln')}
     <div class="mobile-drawer-separator"></div>
@@ -272,18 +274,30 @@ function mobileDrawer(){
 }
 
 function mobileBottomNav(){
-  const items=[['/','home','Home'],['/liga','league','Liga'],['/teams','teams','Teams'],['/spieler','player','Spieler'],[state.me?'/nachrichten':'/login','chat','Chats']];
+  const guestItems=[['/','home','Home'],['/news','news','News'],['/liga','league','Liga'],['/tabelle','table','Tabelle'],['/regeln','rules','Regeln']];
+  const memberItems=[['/','home','Home'],['/liga','league','Liga'],['/teams','teams','Teams'],['/spieler','player','Spieler'],['/nachrichten','chat','Chats']];
+  const items=state.me?memberItems:guestItems;
   return `<nav class="mobile-app-nav">${items.map(([h,i,l])=>`<a data-link href="${h}" class="${navActive(h)?'active':''}">${mobileIcon(i)}<small>${l}</small></a>`).join('')}</nav>`;
 }
 
 function updateNotificationBadges(){document.querySelectorAll('[data-notification-badge]').forEach(b=>{b.textContent=fmt(state.notificationUnread);b.hidden=!state.notificationUnread;});}
 
+const GUEST_SUPPORT_ROUTES=new Set(['/login','/registrieren','/impressum','/datenschutz','/nutzungsbedingungen','/community-richtlinien','/elternzustimmung']);
+function guestCanOpen(p){
+  if(state.me)return true;
+  if(p==='/'||p==='/news'||p.startsWith('/news/')||p==='/liga'||p==='/tabelle'||p==='/regeln')return true;
+  return GUEST_SUPPORT_ROUTES.has(p);
+}
+function renderMembersOnly(){
+  return `<div class="container member-gate-page"><section class="panel member-gate"><div class="member-gate-icon">${mobileIcon('profile')}</div><div class="eyebrow">EPL MITGLIEDERBEREICH</div><h1>Nur für angemeldete Nutzer</h1><p>Teams, Spielerprofile, Transfers, Shop und weitere Community-Funktionen sind ausschließlich für registrierte und angemeldete EPL-Nutzer sichtbar.</p><div class="member-gate-actions"><a class="btn btn-primary" data-link href="/login">ANMELDEN</a><a class="btn btn-ghost" data-link href="/registrieren">JETZT REGISTRIEREN</a><a class="btn btn-ghost" data-link href="/">ZUR STARTSEITE</a></div></section></div>`;
+}
 function route(){
-  const p=path();
+  const p=path(),routeAllowed=guestCanOpen(p);
   if(state.slideTimer){clearInterval(state.slideTimer); state.slideTimer=null;}
   if(state.messagePoll&&p!=='/nachrichten'){clearInterval(state.messagePoll);state.messagePoll=null;}
   let renderer;
-  if(p.startsWith('/mention/')) renderer=()=>renderMentionResolver(decodeURIComponent(p.split('/')[2]||''));
+  if(!routeAllowed) renderer=renderMembersOnly;
+  else if(p.startsWith('/mention/')) renderer=()=>renderMentionResolver(decodeURIComponent(p.split('/')[2]||''));
   else if(p.startsWith('/news/')) renderer=()=>renderNewsArticleShell(decodeURIComponent(p.split('/')[2]||''));
   else if(p.startsWith('/spieler/')) renderer=()=>renderPlayerProfileShell(decodeURIComponent(p.split('/')[2]||''));
   else if(p.startsWith('/club/')) renderer=()=>renderClubProfileShell(decodeURIComponent(p.split('/')[2]||''));
@@ -291,7 +305,7 @@ function route(){
   app.innerHTML = layout(renderer());
   bindGlobal();
   bindEditMode();
-  bindPage(p);
+  bindPage(routeAllowed?p:'/__membergate__');
 }
 function bindGlobal(){
   document.querySelector('[data-action="logout"]')?.addEventListener('click',async()=>{try{await api('/api/auth/logout',{method:'POST',body:'{}'})}catch{} state.me=null; toast('Du bist abgemeldet.'); goto('/');});
