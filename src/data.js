@@ -3,8 +3,10 @@ export const demo = {
     name: 'EPL - Elite Pro League',
     logo: '/assets/brand/epl-logo.png',
     trophy: '/assets/user/EPLTrophy.png',
-    defaultAvatar: '/assets/user/standardprofilbild.png',
-    defaultClub: '/assets/user/EPLTrophy.png',
+    defaultAvatar: '/assets/user/standardprofilbildmann.png',
+    defaultAvatarFemale: '/assets/user/standardprofilbildfrau.png',
+    defaultAvatarDiverse: '/assets/user/standardprofilbildfrau.png',
+    defaultClub: '/assets/user/standardprofilbildclub.png',
     defaultCover: '/assets/user/slider-1.png',
     defaultCoinArt: '/assets/user/coin-balance-box.png',
     coinIcon: '/assets/user/coin-logo.png'
