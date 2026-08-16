@@ -16,7 +16,8 @@ export async function onRequest(context){
     if(route === 'config' && method === 'GET') return json({
       paymentsEnabled:String(env.PAYMENTS_ENABLED||'false')==='true',
       oauthGoogleEnabled:!!(env.GOOGLE_CLIENT_ID&&env.GOOGLE_CLIENT_SECRET),
-      oauthDiscordEnabled:!!(env.DISCORD_CLIENT_ID&&env.DISCORD_CLIENT_SECRET)
+      oauthDiscordEnabled:!!(env.DISCORD_CLIENT_ID&&env.DISCORD_CLIENT_SECRET),
+      parentalConsentEmailEnabled:!!(env.RESEND_API_KEY&&env.PARENT_CONSENT_FROM_EMAIL)
     });
     if(route === 'auth/register' && method === 'POST') return fail('Passwort-Registrierung wurde deaktiviert. Bitte Google oder Discord verwenden.',410);
     if(route === 'auth/login' && method === 'POST') return fail('Passwort-Login wurde deaktiviert. Bitte Google oder Discord verwenden.',410);
@@ -25,6 +26,11 @@ export async function onRequest(context){
     if(route === 'auth/oauth/discord/start' && method === 'GET') return oauthStart('discord',request,env);
     if(route === 'auth/oauth/discord/callback' && method === 'GET') return oauthCallback('discord',request,env);
     if(route === 'profile/setup' && method === 'POST') return setupProfile(request,env);
+    if(route === 'parental-consent/check' && method === 'GET') return parentalConsentCheck(request,env);
+    if(route === 'parental-consent/approve' && method === 'POST') return parentalConsentApprove(request,env);
+    if(route === 'account/data-request' && method === 'POST') return createPrivacyAccessRequest(request,env);
+    if(route === 'account/export' && method === 'GET') return exportAccountData(request,env);
+    if(route === 'account/delete' && method === 'POST') return deleteAccount(request,env);
     if(route === 'auth/logout' && method === 'POST') return logout(request,env);
     if(route === 'auth/me' && method === 'GET') return me(request,env);
     if(route === 'presence' && method === 'POST') return heartbeat(request,env);
@@ -153,6 +159,14 @@ function fromB64url(s){s=s.replaceAll('-','+').replaceAll('_','/');while(s.lengt
 function secureCookie(value,maxAge){return `epl_session=${encodeURIComponent(value)}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${maxAge}`}
 function slugify(s){return String(s).normalize('NFKD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'').slice(0,50)}
 function cleanText(s,max=500){return String(s||'').trim().slice(0,max)}
+async function sha256Hex(value){const hash=await crypto.subtle.digest('SHA-256',enc.encode(String(value)));return [...new Uint8Array(hash)].map(b=>b.toString(16).padStart(2,'0')).join('')}
+function htmlEsc(value=''){return String(value).replace(/[&<>\"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',"'":'&#39;'}[c]))}
+function ageFromBirthDate(value){const m=String(value||'').match(/^(\d{4})-(\d{2})-(\d{2})$/);if(!m)return null;const y=Number(m[1]),mo=Number(m[2]),d=Number(m[3]),birth=new Date(Date.UTC(y,mo-1,d));if(birth.getUTCFullYear()!=y||birth.getUTCMonth()!=mo-1||birth.getUTCDate()!=d)return null;const now=new Date();let age=now.getUTCFullYear()-y;const before=(now.getUTCMonth()+1<mo)||((now.getUTCMonth()+1===mo)&&now.getUTCDate()<d);if(before)age--;return age}
+async function sendParentConsentEmail(env,{to,username,consentUrl}){
+  if(!env.RESEND_API_KEY||!env.PARENT_CONSENT_FROM_EMAIL)throw httpError('Elternzustimmungs-E-Mail ist noch nicht eingerichtet. Bitte wende dich an die EPL Administration.',503);
+  const body={from:String(env.PARENT_CONSENT_FROM_EMAIL),to:[to],subject:`EPL – Zustimmung für ${username}`,html:`<div style="font-family:Arial,sans-serif;max-width:620px;margin:auto"><h2>EPL – Elite Pro League</h2><p>Für das EPL-Konto <strong>${htmlEsc(username)}</strong> wurde angegeben, dass die Nutzerin oder der Nutzer 13 bis 15 Jahre alt ist.</p><p>Wenn du erziehungsberechtigt bist und der Nutzung zustimmst, öffne bitte diesen persönlichen Link:</p><p><a href="${htmlEsc(consentUrl)}" style="display:inline-block;padding:12px 18px;background:#0b85ff;color:#fff;text-decoration:none;border-radius:8px">Zustimmung prüfen</a></p><p>Der Link ist 48 Stunden gültig. Wenn du diese Anfrage nicht erwartest, ignoriere diese E-Mail.</p></div>`};
+  const res=await fetch('https://api.resend.com/emails',{method:'POST',headers:{Authorization:`Bearer ${env.RESEND_API_KEY}`,'Content-Type':'application/json'},body:JSON.stringify(body)});if(!res.ok){console.error('Parental consent email failed',res.status,await res.text().catch(()=>''));throw httpError('Die Elternzustimmungs-E-Mail konnte nicht versendet werden.',502);}return true;
+}
 
 function siteOrigin(request,env){
   const configured=String(env.PUBLIC_SITE_URL||'').trim();
@@ -244,7 +258,15 @@ async function oauthCallback(provider,request,env){
     await db.prepare(`UPDATE oauth_accounts SET provider_email=?,provider_username=?,avatar_url=?,updated_at=datetime('now') WHERE provider=? AND provider_user_id=?`).bind(identity.email,identity.username,identity.avatarUrl,provider,identity.id).run();
   }
 
-  if(user.status!=='ACTIVE')return oauthFailure(request,env,'Dieser EPL-Account ist derzeit gesperrt.');
+  if(user.status==='SUSPENDED'){
+    const activeRestriction=await db.prepare(`SELECT id,rule_code,reason,ends_at FROM user_restrictions WHERE user_id=? AND active=1 ORDER BY created_at DESC LIMIT 1`).bind(user.id).first();
+    const expiry=activeRestriction?.ends_at?Date.parse(String(activeRestriction.ends_at).replace(' ','T')+'Z'):NaN;
+    if(Number.isFinite(expiry)&&expiry<=Date.now()){
+      await db.batch([db.prepare(`UPDATE users SET status='ACTIVE',updated_at=datetime('now') WHERE id=?`).bind(user.id),db.prepare(`UPDATE user_restrictions SET active=0,lifted_at=datetime('now') WHERE id=?`).bind(activeRestriction.id)]);
+      user.status='ACTIVE';
+    }
+  }
+  if(user.status!=='ACTIVE'){const r=await db.prepare(`SELECT rule_code,reason,ends_at FROM user_restrictions WHERE user_id=? AND active=1 ORDER BY created_at DESC LIMIT 1`).bind(user.id).first();const until=r?.ends_at?` bis ${r.ends_at}`:'';return oauthFailure(request,env,`Dein Konto ist eingeschränkt${until}. ${r?.rule_code?`Regel ${r.rule_code}: `:''}${r?.reason||'Bitte kontaktiere die EPL Administration.'}`);}
   const sid=randomId(32),maxAge=60*60*24*30;
   await db.batch([db.prepare("DELETE FROM sessions WHERE expires_at<=datetime('now')"),db.prepare(`INSERT INTO sessions(id,user_id,expires_at) VALUES(?,?,datetime('now','+30 days'))`).bind(sid,user.id)]);
   const destination=Number(user.profile_completed||0)===1?'/' : '/profil-einrichten';
@@ -266,12 +288,24 @@ async function uniqueUsername(db,value,providerId){
 }
 async function currentUser(request,env){
   const db=requireDb(env), sid=cookieMap(request).epl_session;if(!sid)return null;
-  const row=await db.prepare(`SELECT u.id,u.email,u.username,u.role,u.status,p.avatar_key,p.cover_key,p.ea_id,p.platform,p.position,p.secondary_position,p.country,p.bio,p.discord,p.free_agent,p.equipped_avatar_frame_id,p.equipped_cover_frame_id,p.equipped_name_effect_id,p.equipped_name_font_id,p.equipped_name_color_id,p.equipped_badge_id,p.use_totw_frame,p.shop_verified,p.shop_spotlight,
-      COALESCE(w.balance,0) AS coins,COALESCE(po.shirt_number,0) AS shirt_number,
-      COALESCE(po.completed,CASE WHEN length(trim(COALESCE(p.ea_id,'')))>0 AND length(trim(COALESCE(p.position,'')))>0 THEN 1 ELSE 0 END) AS profile_completed
+  const row=await db.prepare(`SELECT u.id,u.email,u.username,u.role,u.status,u.birth_date,u.legal_terms_accepted_at,u.privacy_acknowledged_at,u.community_guidelines_accepted_at,p.avatar_key,p.cover_key,p.ea_id,p.platform,p.position,p.secondary_position,p.country,p.bio,p.discord,p.tiktok,p.twitch,p.free_agent,p.equipped_avatar_frame_id,p.equipped_cover_frame_id,p.equipped_name_effect_id,p.equipped_name_font_id,p.equipped_name_color_id,p.equipped_badge_id,p.use_totw_frame,p.shop_verified,p.shop_spotlight,
+      COALESCE(w.balance,0) AS coins,COALESCE(po.shirt_number,0) AS shirt_number,COALESCE(po.parental_consent_status,'NOT_REQUIRED') parental_consent_status,po.guardian_email,
+      COALESCE(po.completed,CASE WHEN length(trim(COALESCE(p.ea_id,'')))>0 AND length(trim(COALESCE(p.position,'')))>0 THEN 1 ELSE 0 END) AS profile_completed,
+      ur.status restriction_status,ur.rule_code restriction_rule,ur.reason restriction_reason,ur.ends_at restriction_until
     FROM sessions s JOIN users u ON u.id=s.user_id LEFT JOIN profiles p ON p.user_id=u.id LEFT JOIN coin_wallets w ON w.user_id=u.id LEFT JOIN profile_onboarding po ON po.user_id=u.id
+    LEFT JOIN user_restrictions ur ON ur.id=(SELECT id FROM user_restrictions r WHERE r.user_id=u.id AND r.active=1 ORDER BY r.created_at DESC LIMIT 1)
     WHERE s.id=? AND s.expires_at>datetime('now')`).bind(sid).first();
   if(!row)return null;
+  if(row.status==='SUSPENDED'&&row.restriction_until){
+    const until=Date.parse(String(row.restriction_until).replace(' ','T')+'Z');
+    if(Number.isFinite(until)&&until<=Date.now()){
+      await db.batch([
+        db.prepare(`UPDATE users SET status='ACTIVE',updated_at=datetime('now') WHERE id=?`).bind(row.id),
+        db.prepare(`UPDATE user_restrictions SET active=0,lifted_at=datetime('now') WHERE user_id=? AND active=1 AND status='SUSPENDED'`).bind(row.id)
+      ]);
+      row.status='ACTIVE';row.restriction_status=null;row.restriction_rule=null;row.restriction_reason=null;row.restriction_until=null;
+    }
+  }
   row.admin_roles=await getAdminRoles(db,row.id);
   row.is_admin=row.role==='SUPER_ADMIN'||row.admin_roles.length>0;
   const managed=await db.prepare(`SELECT c.slug,cm.role FROM club_members cm JOIN clubs c ON c.id=cm.club_id WHERE cm.user_id=? AND cm.left_at IS NULL AND cm.role IN ('MANAGER','CO_MANAGER') LIMIT 1`).bind(row.id).first();
@@ -811,6 +845,60 @@ async function toggleTargetLike(request,env){
   if(!existing&&club.manager_user_id&&Number(club.manager_user_id)!==Number(u.id))await notifyUser(db,club.manager_user_id,'CLUB_LIKE',`${u.username} gefällt ${club.name}`,`${u.username} hat eure Clubseite geliked.`,`/club/${slug}`);
   return json({liked:!existing,count:Number(count?.count||0)});
 }
+async function createReport(request,env){
+  const db=requireDb(env),u=await requireUser(request,env),b=await request.json(),type=cleanText(b.targetType,20).toUpperCase(),targetId=cleanText(b.targetId,100),reason=cleanText(b.reason,120),details=cleanText(b.details,1200),sourceUrl=cleanText(b.sourceUrl,500);
+  const allowed=['POST','COMMENT','USER','CLUB','NEWS','MESSAGE','OTHER'];if(!allowed.includes(type)||!targetId||!reason)return fail('Meldung unvollständig.');
+  if(type==='MESSAGE'){
+    const m=await db.prepare(`SELECT dm.id,dm.sender_user_id,c.user_a,c.user_b FROM direct_messages dm JOIN conversations c ON c.id=dm.conversation_id WHERE dm.id=? AND dm.deleted_at IS NULL`).bind(Number(targetId)).first();if(!m)return fail('Nachricht nicht gefunden.',404);if(![Number(m.user_a),Number(m.user_b)].includes(Number(u.id)))return fail('Du kannst nur Nachrichten aus deinen eigenen Unterhaltungen melden.',403);if(Number(m.sender_user_id)===Number(u.id))return fail('Eigene Nachrichten müssen nicht gemeldet werden.');
+  }
+  const dup=await db.prepare(`SELECT id FROM reports WHERE reporter_user_id=? AND target_type=? AND target_id=? AND status IN ('OPEN','REVIEWED') LIMIT 1`).bind(u.id,type,targetId).first();if(dup)return fail('Du hast diesen Inhalt bereits gemeldet.',409);
+  const r=await db.prepare(`INSERT INTO reports(reporter_user_id,target_type,target_id,reason,details,source_url) VALUES(?,?,?,?,?,?)`).bind(u.id,type,targetId,reason,details,sourceUrl).run();return json({ok:true,id:r.meta.last_row_id},201);
+}
+async function adminReports(request,env){const db=requireDb(env);await requireAdminPermission(request,env,'moderation');const rows=await db.prepare(`SELECT r.*,u.username reporter FROM reports r JOIN users u ON u.id=r.reporter_user_id ORDER BY CASE r.status WHEN 'OPEN' THEN 0 WHEN 'REVIEWED' THEN 1 ELSE 2 END,r.created_at DESC LIMIT 300`).all();return json({reports:rows.results||[]});}
+async function reportTarget(db,report){
+  const id=report.target_id;
+  if(report.target_type==='POST')return db.prepare(`SELECT p.id,p.body,p.media_key,p.created_at,COALESCE(c.name,u.username) author FROM posts p LEFT JOIN users u ON u.id=p.author_user_id LEFT JOIN clubs c ON c.id=p.club_id WHERE p.id=?`).bind(Number(id)).first();
+  if(report.target_type==='COMMENT')return db.prepare(`SELECT cm.id,cm.body,cm.created_at,COALESCE(c.name,u.username) author,p.body post_body FROM comments cm LEFT JOIN users u ON u.id=cm.user_id LEFT JOIN clubs c ON c.id=cm.actor_club_id JOIN posts p ON p.id=cm.post_id WHERE cm.id=?`).bind(Number(id)).first();
+  if(report.target_type==='USER')return db.prepare(`SELECT u.id,u.username,u.status,p.bio,p.avatar_key FROM users u LEFT JOIN profiles p ON p.user_id=u.id WHERE u.id=?`).bind(Number(id)).first();
+  if(report.target_type==='CLUB')return db.prepare(`SELECT id,name,slug,bio,logo_key FROM clubs WHERE id=?`).bind(Number(id)).first();
+  if(report.target_type==='NEWS')return db.prepare(`SELECT n.id,n.title,n.body,n.image_key,n.created_at,u.username author FROM news n LEFT JOIN users u ON u.id=n.author_user_id WHERE n.id=? OR n.slug=?`).bind(Number(id)||0,id).first();
+  if(report.target_type==='MESSAGE'){
+    const msg=await db.prepare(`SELECT dm.id,dm.conversation_id,dm.body,dm.created_at,u.username author FROM direct_messages dm JOIN users u ON u.id=dm.sender_user_id WHERE dm.id=?`).bind(Number(id)).first();if(!msg)return null;const context=await db.prepare(`SELECT dm.id,dm.body,dm.created_at,u.username author FROM direct_messages dm JOIN users u ON u.id=dm.sender_user_id WHERE dm.conversation_id=? AND dm.id BETWEEN ? AND ? ORDER BY dm.id`).bind(msg.conversation_id,Math.max(1,Number(msg.id)-2),Number(msg.id)+2).all();return {...msg,message_context:context.results||[]};
+  }
+  return {body:report.details||'',created_at:report.created_at};
+}
+async function adminReportDetail(route,request,env){const db=requireDb(env);await requireAdminPermission(request,env,'moderation');const id=Number(route.split('/').pop()),report=await db.prepare(`SELECT r.*,u.username reporter FROM reports r JOIN users u ON u.id=r.reporter_user_id WHERE r.id=?`).bind(id).first();if(!report)return fail('Meldung nicht gefunden.',404);return json({report,target:await reportTarget(db,report)});}
+async function adminReportResolve(request,env){const db=requireDb(env),admin=await requireAdminPermission(request,env,'moderation'),b=await request.json(),id=asId(b.reportId),status=cleanText(b.status,20).toUpperCase(),decisionReason=cleanText(b.decisionReason,1200),decisionAction=cleanText(b.decisionAction,80);if(!id||!['REVIEWED','RESOLVED','REJECTED'].includes(status))return fail('Ungültige Moderationsentscheidung.');if(['RESOLVED','REJECTED'].includes(status)&&decisionReason.length<3)return fail('Bitte dokumentiere kurz die Begründung der Entscheidung.');const report=await db.prepare('SELECT * FROM reports WHERE id=?').bind(id).first();if(!report)return fail('Meldung nicht gefunden.',404);await db.batch([db.prepare(`UPDATE reports SET status=?,decision_reason=?,decision_action=?,handled_by=?,handled_at=datetime('now') WHERE id=?`).bind(status,decisionReason,decisionAction,admin.id,id),db.prepare(`INSERT INTO moderation_actions(report_id,moderator_user_id,target_type,target_id,action,reason) VALUES(?,?,?,?,?,?)`).bind(id,admin.id,report.target_type,report.target_id,decisionAction||status,decisionReason||status)]);return json({ok:true});}
+async function adminContentDelete(request,env){const db=requireDb(env),admin=await requireAdminPermission(request,env,'moderation'),b=await request.json(),type=cleanText(b.targetType,20).toUpperCase(),id=cleanText(b.targetId,100),reason=cleanText(b.reason,500)||'Moderationsentscheidung';if(type==='POST')await db.prepare('DELETE FROM posts WHERE id=?').bind(Number(id)).run();else if(type==='COMMENT')await db.prepare('DELETE FROM comments WHERE id=?').bind(Number(id)).run();else if(type==='NEWS')await db.prepare('DELETE FROM news WHERE id=? OR slug=?').bind(Number(id)||0,id).run();else if(type==='MESSAGE')await db.prepare(`UPDATE direct_messages SET deleted_at=datetime('now'),body='[Nachricht durch Moderation entfernt]' WHERE id=?`).bind(Number(id)).run();else return fail('Dieser Inhaltstyp kann hier nicht gelöscht werden.');await db.prepare(`INSERT INTO moderation_actions(moderator_user_id,target_type,target_id,action,reason) VALUES(?,?,?,'CONTENT_REMOVED',?)`).bind(admin.id,type,id,reason).run();return json({ok:true});}
+async function createPrivacyAccessRequest(request,env){const db=requireDb(env),u=await currentUser(request,env);if(!u)throw httpError('Bitte zuerst anmelden.',401);const r=await db.prepare(`INSERT INTO privacy_requests(user_id,request_type,status) VALUES(?,'ACCESS','OPEN')`).bind(u.id).run();return json({ok:true,id:r.meta.last_row_id});}
+async function exportAccountData(request,env){
+  const db=requireDb(env),u=await currentUser(request,env);if(!u)throw httpError('Bitte zuerst anmelden.',401);const q=async(sql,...bind)=>(await db.prepare(sql).bind(...bind).all()).results||[];
+  const data={generatedAt:new Date().toISOString(),account:await db.prepare(`SELECT id,email,username,role,status,birth_date,created_at,updated_at FROM users WHERE id=?`).bind(u.id).first(),profile:await db.prepare(`SELECT * FROM profiles WHERE user_id=?`).bind(u.id).first(),onboarding:await db.prepare(`SELECT user_id,shirt_number,completed,parental_consent_status,guardian_email,updated_at FROM profile_onboarding WHERE user_id=?`).bind(u.id).first(),clubMemberships:await q(`SELECT cm.*,c.name club_name FROM club_members cm JOIN clubs c ON c.id=cm.club_id WHERE cm.user_id=?`,u.id),posts:await q(`SELECT id,body,media_key,created_at FROM posts WHERE author_user_id=?`,u.id),comments:await q(`SELECT id,post_id,body,created_at FROM comments WHERE user_id=?`,u.id),notifications:await q(`SELECT type,title,body,href,read_at,created_at FROM notifications WHERE user_id=? ORDER BY created_at DESC`,u.id),coinTransactions:await q(`SELECT amount,type,reference_type,description,created_at FROM coin_transactions WHERE user_id=? ORDER BY created_at DESC`,u.id),messages:await q(`SELECT dm.id,dm.body,dm.created_at,dm.read_at,CASE WHEN dm.sender_user_id=? THEN 'sent' ELSE 'received' END direction FROM direct_messages dm JOIN conversations c ON c.id=dm.conversation_id WHERE (c.user_a=? OR c.user_b=?) AND dm.deleted_at IS NULL ORDER BY dm.created_at`,u.id,u.id,u.id),reports:await q(`SELECT target_type,target_id,reason,details,status,decision_reason,created_at FROM reports WHERE reporter_user_id=? ORDER BY created_at DESC`,u.id)};
+  await db.prepare(`UPDATE privacy_requests SET status='COMPLETED',completed_at=datetime('now') WHERE user_id=? AND request_type='ACCESS' AND status='OPEN'`).bind(u.id).run();return json({ok:true,data});
+}
+async function deleteAccount(request,env){
+  const db=requireDb(env),u=await currentUser(request,env);if(!u)throw httpError('Bitte zuerst anmelden.',401);const b=await request.json();if(cleanText(b.confirmUsername,40).toLowerCase()!==String(u.username).toLowerCase())return fail('Bitte bestätige deinen Benutzernamen exakt.');if(!b.confirmDeletion)return fail('Bitte bestätige die endgültige Kontolöschung.');
+  const media=(await db.prepare(`SELECT avatar_key k FROM profiles WHERE user_id=? UNION ALL SELECT cover_key k FROM profiles WHERE user_id=? UNION ALL SELECT media_key k FROM posts WHERE author_user_id=?`).bind(u.id,u.id,u.id).all()).results||[];for(const x of media){const k=String(x.k||'');if(k&&env.MEDIA&&!/^https?:\/\//i.test(k)){try{await env.MEDIA.delete(k.replace(/^\/api\/media\//,''))}catch{}}}
+  const suffix=randomId(8).replace(/[^A-Za-z0-9]/g,'').slice(0,10),deletedUsername=`DeletedUser${u.id}_${suffix}`.slice(0,24),deletedEmail=`deleted-${u.id}-${suffix}@invalid.local`;
+  const statements=[
+    db.prepare(`INSERT INTO privacy_requests(user_id,request_type,status,completed_at) VALUES(?,'DELETE','COMPLETED',datetime('now'))`).bind(u.id),
+    db.prepare(`DELETE FROM sessions WHERE user_id=?`).bind(u.id),
+    db.prepare(`DELETE FROM oauth_accounts WHERE user_id=?`).bind(u.id),
+    db.prepare(`DELETE FROM notifications WHERE user_id=?`).bind(u.id),
+    db.prepare(`DELETE FROM conversations WHERE user_a=? OR user_b=?`).bind(u.id,u.id),
+    db.prepare(`DELETE FROM posts WHERE author_user_id=?`).bind(u.id),
+    db.prepare(`DELETE FROM comments WHERE user_id=?`).bind(u.id),
+    db.prepare(`DELETE FROM user_inventory WHERE user_id=?`).bind(u.id),
+    db.prepare(`DELETE FROM user_admin_roles WHERE user_id=?`).bind(u.id),
+    db.prepare(`DELETE FROM parental_consents WHERE user_id=?`).bind(u.id),
+    db.prepare(`UPDATE coin_wallets SET balance=0,updated_at=datetime('now') WHERE user_id=?`).bind(u.id),
+    db.prepare(`UPDATE profiles SET ea_id='',platform='',console_id='',avatar_key=NULL,cover_key=NULL,discord='',tiktok='',twitch='',country='',bio='',free_agent=0,equipped_avatar_frame_id=NULL,equipped_cover_frame_id=NULL,equipped_name_effect_id=NULL,equipped_name_font_id=NULL,equipped_name_color_id=NULL,equipped_badge_id=NULL,use_totw_frame=0,updated_at=datetime('now') WHERE user_id=?`).bind(u.id),
+    db.prepare(`UPDATE profile_onboarding SET completed=0,guardian_email=NULL,parental_consent_status='NOT_REQUIRED',updated_at=datetime('now') WHERE user_id=?`).bind(u.id),
+    db.prepare(`UPDATE users SET email=?,username=?,password_hash=?,status='BANNED',birth_date=NULL,legal_terms_accepted_at=NULL,privacy_acknowledged_at=NULL,community_guidelines_accepted_at=NULL,updated_at=datetime('now') WHERE id=?`).bind(deletedEmail,deletedUsername,`deleted$${randomId(24)}`,u.id)
+  ];
+  await db.batch(statements);return json({ok:true,anonymized:true},200,{'set-cookie':'epl_session=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0'});
+}
+
 async function adminCoinAward(request,env){const db=requireDb(env),u=await requireAdminPermission(request,env,'coins'),b=await request.json(),amount=Math.trunc(Number(b.amount));if(!Number.isFinite(amount)||amount===0||Math.abs(amount)>10000)return fail('Ungültiger Coin-Betrag.');const target=await db.prepare('SELECT id,username FROM users WHERE username=? COLLATE NOCASE').bind(cleanText(b.username,24)).first();if(!target)return fail('Spieler nicht gefunden.',404);if(amount<0){const w=await db.prepare('SELECT balance FROM coin_wallets WHERE user_id=?').bind(target.id).first();if(!w||w.balance+amount<0)return fail('Wallet würde negativ werden.',409);}const ref=crypto.randomUUID();await db.batch([db.prepare('UPDATE coin_wallets SET balance=balance+?,lifetime_earned=lifetime_earned+CASE WHEN ?>0 THEN ? ELSE 0 END,lifetime_spent=lifetime_spent+CASE WHEN ?<0 THEN -? ELSE 0 END,updated_at=datetime(\'now\') WHERE user_id=?').bind(amount,amount,amount,amount,amount,target.id),db.prepare(`INSERT INTO coin_transactions(user_id,amount,type,reference_type,reference_id,description) VALUES(?,?,'ADMIN_ADJUSTMENT','ADMIN',?,?)`).bind(target.id,amount,ref,cleanText(b.description,200)||`Admin-Anpassung durch ${u.username}`)]);const w2=await db.prepare('SELECT balance FROM coin_wallets WHERE user_id=?').bind(target.id).first();return json({ok:true,balance:w2.balance})}
 async function adminAwardsOverview(request,env){
   const db=requireDb(env),admin=await requireAdminPermission(request,env,'awards'),url=new URL(request.url),userId=asId(url.searchParams.get('userId'));
@@ -897,7 +985,7 @@ async function confirmMatch(route,request,env){
 
 async function setupProfile(request,env){
   const db=requireDb(env),u=await requireUser(request,env),b=await request.json();
-  const username=cleanText(b.username,24),eaId=cleanText(b.eaId,80),platform=cleanText(b.platform,30),position=cleanText(b.position,8),secondary=cleanText(b.secondaryPosition,8),country=cleanText(b.country||'DE',2).toUpperCase(),shirtNumber=Number(b.shirtNumber);
+  const username=cleanText(b.username,24),eaId=cleanText(b.eaId,80),platform=cleanText(b.platform,30),position=cleanText(b.position,8),secondary=cleanText(b.secondaryPosition,8),country=cleanText(b.country||'DE',2).toUpperCase(),shirtNumber=Number(b.shirtNumber),birthDate=cleanText(b.birthDate,10),age=ageFromBirthDate(birthDate);
   if(!/^[A-Za-z0-9_.-]{3,24}$/.test(username))return fail('EPL Benutzername: 3–24 Zeichen, nur Buchstaben, Zahlen, _ . -');
   if(eaId.length<3)return fail('Bitte gib deine EA ID an.');
   if(!['ps5','xbox-series','pc'].includes(platform))return fail('Bitte wähle eine gültige Plattform.');
@@ -905,13 +993,47 @@ async function setupProfile(request,env){
   if(secondary&&!['ST','ZOM','ZM','ZDM','LM','RM','LV','RV','IV','TW'].includes(secondary))return fail('Ungültige Nebenposition.');
   if(!Number.isInteger(shirtNumber)||shirtNumber<1||shirtNumber>99)return fail('Trikotnummer muss zwischen 1 und 99 liegen.');
   if(!/^[A-Z]{2}$/.test(country))return fail('Land muss als zweistelliger Code angegeben werden, z. B. DE.');
+  if(age===null)return fail('Bitte gib ein gültiges Geburtsdatum an.');
+  if(age<13)return fail('Personen unter 13 Jahren können kein eigenes EPL-Konto erstellen.',403);
+  if(!b.acceptTerms||!b.acceptPrivacy||!b.acceptCommunity)return fail('Bitte bestätige Nutzungsbedingungen, Datenschutz und Community-Richtlinien.');
   const taken=await db.prepare('SELECT id FROM users WHERE username=? COLLATE NOCASE AND id<>?').bind(username,u.id).first();if(taken)return fail('Dieser EPL Benutzername ist bereits vergeben.',409);
+  const legalNow="datetime('now')";
+  if(age>=13&&age<=15){
+    const guardianEmail=cleanText(b.guardianEmail,254).toLowerCase();if(!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(guardianEmail))return fail('Für Nutzer zwischen 13 und 15 Jahren ist eine gültige E-Mail-Adresse eines Erziehungsberechtigten erforderlich.');
+    if(!env.RESEND_API_KEY||!env.PARENT_CONSENT_FROM_EMAIL)return fail('Die Registrierung für 13–15-Jährige ist erst möglich, sobald der Versand der Elternzustimmung eingerichtet wurde.',503);
+    const token=randomId(32),tokenHash=await sha256Hex(token),origin=siteOrigin(request,env),consentUrl=`${origin}/elternzustimmung?token=${encodeURIComponent(token)}`;
+    await db.batch([
+      db.prepare(`UPDATE users SET username=?,birth_date=?,legal_terms_accepted_at=${legalNow},privacy_acknowledged_at=${legalNow},community_guidelines_accepted_at=${legalNow},updated_at=datetime('now') WHERE id=?`).bind(username,birthDate,u.id),
+      db.prepare(`UPDATE profiles SET ea_id=?,platform=?,country=?,position=?,secondary_position=?,updated_at=datetime('now') WHERE user_id=?`).bind(eaId,platform,country,position,secondary,u.id),
+      db.prepare(`INSERT INTO profile_onboarding(user_id,shirt_number,completed,parental_consent_status,guardian_email,updated_at) VALUES(?,?,0,'PENDING',?,datetime('now')) ON CONFLICT(user_id) DO UPDATE SET shirt_number=excluded.shirt_number,completed=0,parental_consent_status='PENDING',guardian_email=excluded.guardian_email,updated_at=datetime('now')`).bind(u.id,shirtNumber,guardianEmail),
+      db.prepare(`UPDATE parental_consents SET status='EXPIRED' WHERE user_id=? AND status='PENDING'`).bind(u.id),
+      db.prepare(`INSERT INTO parental_consents(user_id,guardian_email,token_hash,status,expires_at) VALUES(?,?,?,'PENDING',datetime('now','+48 hours'))`).bind(u.id,guardianEmail,tokenHash)
+    ]);
+    try{
+      await sendParentConsentEmail(env,{to:guardianEmail,username,consentUrl});
+    }catch(error){
+      console.error('Parental consent email failed',error);
+      await db.batch([
+        db.prepare(`UPDATE parental_consents SET status='EXPIRED' WHERE user_id=? AND status='PENDING'`).bind(u.id),
+        db.prepare(`UPDATE profile_onboarding SET parental_consent_status='NOT_REQUIRED',completed=0,updated_at=datetime('now') WHERE user_id=?`).bind(u.id)
+      ]);
+      return fail('Die Zustimmungs-E-Mail konnte nicht versendet werden. Bitte prüfe die Adresse oder versuche es später erneut.',502);
+    }
+    const refreshed=await currentUser(request,env);return json({ok:true,parentalConsentRequired:true,user:refreshed});
+  }
   await db.batch([
-    db.prepare(`UPDATE users SET username=?,updated_at=datetime('now') WHERE id=?`).bind(username,u.id),
+    db.prepare(`UPDATE users SET username=?,birth_date=?,legal_terms_accepted_at=${legalNow},privacy_acknowledged_at=${legalNow},community_guidelines_accepted_at=${legalNow},updated_at=datetime('now') WHERE id=?`).bind(username,birthDate,u.id),
     db.prepare(`UPDATE profiles SET ea_id=?,platform=?,country=?,position=?,secondary_position=?,updated_at=datetime('now') WHERE user_id=?`).bind(eaId,platform,country,position,secondary,u.id),
-    db.prepare(`INSERT INTO profile_onboarding(user_id,shirt_number,completed,updated_at) VALUES(?,?,1,datetime('now')) ON CONFLICT(user_id) DO UPDATE SET shirt_number=excluded.shirt_number,completed=1,updated_at=datetime('now')`).bind(u.id,shirtNumber)
+    db.prepare(`INSERT INTO profile_onboarding(user_id,shirt_number,completed,parental_consent_status,guardian_email,updated_at) VALUES(?,?,1,'NOT_REQUIRED',NULL,datetime('now')) ON CONFLICT(user_id) DO UPDATE SET shirt_number=excluded.shirt_number,completed=1,parental_consent_status='NOT_REQUIRED',guardian_email=NULL,updated_at=datetime('now')`).bind(u.id,shirtNumber)
   ]);
   const refreshed=await currentUser(request,env);return json({ok:true,user:refreshed});
+}
+
+async function parentalConsentCheck(request,env){
+  const db=requireDb(env),url=new URL(request.url),token=cleanText(url.searchParams.get('token'),200);if(!token)return fail('Zustimmungslink fehlt.',400);const hash=await sha256Hex(token);const row=await db.prepare(`SELECT pc.id,pc.status,pc.guardian_email,pc.expires_at,u.username,u.birth_date FROM parental_consents pc JOIN users u ON u.id=pc.user_id WHERE pc.token_hash=?`).bind(hash).first();if(!row)return fail('Dieser Zustimmungslink ist ungültig.',404);if(row.status!=='PENDING')return json({status:row.status,username:row.username,expiresAt:row.expires_at});if(new Date(row.expires_at+'Z').getTime()<Date.now()){await db.prepare(`UPDATE parental_consents SET status='EXPIRED' WHERE id=?`).bind(row.id).run();return fail('Dieser Zustimmungslink ist abgelaufen.',410);}return json({status:'PENDING',username:row.username,guardianEmailMasked:String(row.guardian_email).replace(/^(.{1,2}).*(@.*)$/,'$1***$2'),expiresAt:row.expires_at});
+}
+async function parentalConsentApprove(request,env){
+  const db=requireDb(env),b=await request.json(),token=cleanText(b.token,200),guardianName=cleanText(b.guardianName,120);if(!token||guardianName.length<2||!b.confirmResponsibility||!b.confirmConsent)return fail('Bitte bestätige alle Angaben.');const hash=await sha256Hex(token),row=await db.prepare(`SELECT pc.*,u.username FROM parental_consents pc JOIN users u ON u.id=pc.user_id WHERE pc.token_hash=?`).bind(hash).first();if(!row)return fail('Zustimmungslink ungültig.',404);if(row.status!=='PENDING')return fail('Diese Anfrage wurde bereits bearbeitet.',409);if(new Date(row.expires_at+'Z').getTime()<Date.now())return fail('Dieser Zustimmungslink ist abgelaufen.',410);const ip=request.headers.get('CF-Connecting-IP')||'',ipHash=ip?await sha256Hex(ip):null;await db.batch([db.prepare(`UPDATE parental_consents SET status='APPROVED',guardian_name=?,consented_at=datetime('now'),ip_hash=?,user_agent=? WHERE id=?`).bind(guardianName,ipHash,cleanText(request.headers.get('User-Agent'),300),row.id),db.prepare(`UPDATE profile_onboarding SET parental_consent_status='APPROVED',completed=1,updated_at=datetime('now') WHERE user_id=?`).bind(row.user_id)]);await notifyUser(db,row.user_id,'PARENTAL_CONSENT','Elternzustimmung bestätigt','Die Zustimmung wurde bestätigt. Dein EPL Profil kann jetzt vollständig genutzt werden.','/');return json({ok:true,username:row.username});
 }
 
 async function updateProfile(request,env){
@@ -946,9 +1068,10 @@ async function adminOverview(request,env){
   const [users,clubs,seasons,divisions,matches,news,transfers]=await Promise.all([
     db.prepare(`SELECT u.id,u.username,u.email,u.role,u.status,u.created_at,p.ea_id,p.platform,p.country,p.position,p.secondary_position,p.bio,p.discord,p.tiktok,p.twitch,p.market_value_override,p.pac,p.sho,p.pas,p.dri,p.def,p.phy,p.overall,p.verified,
       COALESCE(po.shirt_number,0) shirt_number,COALESCE(w.balance,0) coins,COALESCE(GROUP_CONCAT(DISTINCT ar.role),'') admin_roles,
+      ur.rule_code restriction_rule,ur.reason restriction_reason,ur.ends_at restriction_until,
       c.name club_name,c.id club_id,cm.role club_role
       FROM users u LEFT JOIN profiles p ON p.user_id=u.id LEFT JOIN profile_onboarding po ON po.user_id=u.id LEFT JOIN coin_wallets w ON w.user_id=u.id
-      LEFT JOIN user_admin_roles ar ON ar.user_id=u.id LEFT JOIN club_members cm ON cm.user_id=u.id AND cm.left_at IS NULL LEFT JOIN clubs c ON c.id=cm.club_id
+      LEFT JOIN user_admin_roles ar ON ar.user_id=u.id LEFT JOIN user_restrictions ur ON ur.id=(SELECT id FROM user_restrictions r WHERE r.user_id=u.id AND r.active=1 ORDER BY r.created_at DESC LIMIT 1) LEFT JOIN club_members cm ON cm.user_id=u.id AND cm.left_at IS NULL LEFT JOIN clubs c ON c.id=cm.club_id
       GROUP BY u.id ORDER BY u.created_at DESC`).all(),
     db.prepare(`SELECT c.id,c.name,c.slug,c.ea_club_id,c.platform,c.division_id,c.reputation,c.followers_count,c.verified,u.username manager_username,u.id manager_user_id,d.name division_name,
       cd.bio,cd.discord,cd.tiktok,cd.twitch,cd.website,COALESCE(cw.balance,0) club_coins FROM clubs c LEFT JOIN users u ON u.id=c.manager_user_id LEFT JOIN divisions d ON d.id=c.division_id LEFT JOIN club_details cd ON cd.club_id=c.id LEFT JOIN club_coin_wallets cw ON cw.club_id=c.id ORDER BY c.created_at DESC`).all(),
@@ -966,17 +1089,14 @@ async function adminOverview(request,env){
 }
 
 async function adminUserAccess(request,env){
-  const db=requireDb(env),owner=await requireAdminPermission(request,env,'users',{ownerOnly:true}),b=await request.json(),userId=asId(b.userId);
-  if(!userId)return fail('Benutzer fehlt.');
-  const target=await db.prepare('SELECT id,username,role FROM users WHERE id=?').bind(userId).first();if(!target)return fail('Benutzer nicht gefunden.',404);
-  if(target.id===owner.id && b.status && b.status!=='ACTIVE')return fail('Der Hauptadmin kann sich nicht selbst sperren.',409);
-  const roles=[...new Set(Array.isArray(b.adminRoles)?b.adminRoles:[])].filter(x=>ADMIN_ROLES_ALLOWED.includes(x));
-  const status=['ACTIVE','SUSPENDED','BANNED'].includes(b.status)?b.status:'ACTIVE';
-  let baseRole=['PLAYER','MANAGER'].includes(b.baseRole)?b.baseRole:target.role;
-  if(target.role==='SUPER_ADMIN'&&target.id!==owner.id)baseRole='PLAYER';
-  const statements=[db.prepare(`UPDATE users SET status=?,role=?,updated_at=datetime('now') WHERE id=?`).bind(status,baseRole,userId),db.prepare('DELETE FROM user_admin_roles WHERE user_id=?').bind(userId)];
-  for(const role of roles)statements.push(db.prepare('INSERT INTO user_admin_roles(user_id,role,assigned_by) VALUES(?,?,?)').bind(userId,role,owner.id));
-  await db.batch(statements);return json({ok:true,username:target.username,adminRoles:roles,status,baseRole});
+  const db=requireDb(env),admin=await requireAdminPermission(request,env,'moderation'),b=await request.json(),userId=asId(b.userId);
+  if(!userId)return fail('Benutzer fehlt.');const target=await db.prepare('SELECT id,username,role,status FROM users WHERE id=?').bind(userId).first();if(!target)return fail('Benutzer nicht gefunden.',404);if(target.role==='SUPER_ADMIN'&&admin.role!=='SUPER_ADMIN')return fail('Der Website-Hauptadmin kann nur durch den Hauptadmin selbst verwaltet werden.',403);if(target.id===admin.id&&b.status&&b.status!=='ACTIVE')return fail('Du kannst dich nicht selbst sperren.',409);
+  const canAssignAdminRoles=admin.role==='SUPER_ADMIN';const existingRoles=await getAdminRoles(db,userId);const roles=canAssignAdminRoles?[...new Set(Array.isArray(b.adminRoles)?b.adminRoles:[])].filter(x=>ADMIN_ROLES_ALLOWED.includes(x)):existingRoles,status=['ACTIVE','SUSPENDED','BANNED'].includes(b.status)?b.status:'ACTIVE';let baseRole=['PLAYER','MANAGER'].includes(b.baseRole)?b.baseRole:target.role;if(target.role==='SUPER_ADMIN')baseRole='SUPER_ADMIN';
+  const ruleCode=cleanText(b.ruleCode,80),reason=cleanText(b.restrictionReason,800),until=cleanText(b.restrictionUntil,40)||null;if(status!=='ACTIVE'&&reason.length<3)return fail('Bei einer Sperre ist eine Begründung erforderlich.');
+  const statements=[db.prepare(`UPDATE users SET status=?,role=?,updated_at=datetime('now') WHERE id=?`).bind(status,baseRole,userId)];
+  if(canAssignAdminRoles){statements.push(db.prepare('DELETE FROM user_admin_roles WHERE user_id=?').bind(userId));for(const role of roles)statements.push(db.prepare('INSERT INTO user_admin_roles(user_id,role,assigned_by) VALUES(?,?,?)').bind(userId,role,admin.id));}
+  if(status==='ACTIVE')statements.push(db.prepare(`UPDATE user_restrictions SET active=0,lifted_at=datetime('now'),lifted_by=? WHERE user_id=? AND active=1`).bind(admin.id,userId));else{statements.push(db.prepare(`UPDATE user_restrictions SET active=0,lifted_at=datetime('now'),lifted_by=? WHERE user_id=? AND active=1`).bind(admin.id,userId));statements.push(db.prepare(`INSERT INTO user_restrictions(user_id,status,rule_code,reason,ends_at,created_by) VALUES(?,?,?,?,?,?)`).bind(userId,status,ruleCode,reason,until,admin.id));statements.push(db.prepare(`INSERT INTO notifications(user_id,type,title,body,href) VALUES(?,?,?,?,?)`).bind(userId,'ACCOUNT_RESTRICTION',status==='BANNED'?'Dein EPL Konto wurde gesperrt':'Dein EPL Konto wurde eingeschränkt',`Dein Konto wurde wegen ${ruleCode?`Verstoß gegen ${ruleCode}`:'eines Regelverstoßes'}${until?` bis ${until}`:''} eingeschränkt. ${reason}`,'/einstellungen'));}
+  await db.batch(statements);return json({ok:true,username:target.username,adminRoles:roles,status,baseRole,adminRolesChanged:canAssignAdminRoles});
 }
 
 async function adminUserProfile(request,env){
@@ -1565,6 +1685,23 @@ async function getBootstrap(env){
 // ============================================================
 // EPL v4 additions: dynamic Shop/CMS, moderation and goals
 // ============================================================
+async function getCmsPublic(env){
+  const db=requireDb(env);const [pages,slides,blocks,entries]=await Promise.all([
+    db.prepare(`SELECT page_key,eyebrow,title,subtitle,updated_at FROM cms_page_settings ORDER BY page_key`).all(),
+    db.prepare(`SELECT id,eyebrow,title,copy,cta_primary_label,cta_primary_href,cta_secondary_label,cta_secondary_href,visual_key,sort_order,active,updated_at FROM cms_home_slides WHERE active=1 ORDER BY sort_order,id`).all(),
+    db.prepare(`SELECT id,page_key,title,body,image_key,cta_label,cta_href,sort_order,active,updated_at FROM cms_page_blocks WHERE active=1 ORDER BY page_key,sort_order,id`).all(),
+    db.prepare(`SELECT id,page_key,content_key,label,value,sort_order,updated_at FROM cms_content_entries ORDER BY page_key,sort_order,id`).all()
+  ]);return json({pages:pages.results||[],slides:slides.results||[],blocks:blocks.results||[],entries:entries.results||[]});
+}
+async function adminCmsOverview(request,env){
+  const db=requireDb(env);await requireAdminPermission(request,env,'cms');const [pages,slides,blocks,entries]=await Promise.all([
+    db.prepare(`SELECT * FROM cms_page_settings ORDER BY page_key`).all(),db.prepare(`SELECT * FROM cms_home_slides ORDER BY sort_order,id`).all(),db.prepare(`SELECT * FROM cms_page_blocks ORDER BY page_key,sort_order,id`).all(),db.prepare(`SELECT * FROM cms_content_entries ORDER BY page_key,sort_order,id`).all()
+  ]);return json({pages:pages.results||[],slides:slides.results||[],blocks:blocks.results||[],entries:entries.results||[]});
+}
+async function getNewsArticle(slug,env){
+  const db=requireDb(env),article=await db.prepare(`SELECT n.id,n.slug,n.title,n.excerpt,n.body,n.image_key,n.published_at,n.created_at,COALESCE(u.username,'EPL Redaktion') author FROM news n LEFT JOIN users u ON u.id=n.author_user_id WHERE (n.slug=? OR n.id=?) AND n.status='PUBLISHED' LIMIT 1`).bind(cleanText(slug,160),Number(slug)||0).first();if(!article)return fail('News-Artikel nicht gefunden.',404);return json({article});
+}
+
 async function getShopCatalog(request,env){
   const db=requireDb(env),viewer=await currentUser(request,env);let managedClub=null,teamEntitlements=null;if(viewer?.managed_club_slug){managedClub=await db.prepare(`SELECT c.id,c.name,c.slug,COALESCE(cw.balance,0) club_balance FROM clubs c LEFT JOIN club_coin_wallets cw ON cw.club_id=c.id WHERE c.slug=?`).bind(viewer.managed_club_slug).first();if(managedClub){await db.prepare(`INSERT OR IGNORE INTO club_shop_entitlements(club_id) VALUES(?)`).bind(managedClub.id).run();teamEntitlements=await db.prepare(`SELECT transfer_credits,release_credits,red_card_removal_credits FROM club_shop_entitlements WHERE club_id=?`).bind(managedClub.id).first();}}
   const [items,parts]=await Promise.all([db.prepare(`SELECT id,sku,name,category,description,price_coins,price_eur_cents,asset_key,rarity,active,shop_group,item_type,style_key,style_value FROM shop_items WHERE active=1 AND (shop_group<>'TEAM' OR ?=1) ORDER BY CASE shop_group WHEN 'AVATAR_FRAME' THEN 1 WHEN 'ANIMATED_FRAME' THEN 2 WHEN 'COVER_FRAME' THEN 3 WHEN 'NAME_STYLES' THEN 4 WHEN 'BADGE' THEN 5 WHEN 'BUNDLE' THEN 6 WHEN 'TEAM' THEN 7 WHEN 'OTHER' THEN 8 ELSE 9 END,id`).bind(managedClub?1:0).all(),db.prepare(`SELECT sbi.bundle_item_id,sbi.item_id,si.name,si.category,si.asset_key,si.rarity FROM shop_bundle_items sbi JOIN shop_items si ON si.id=sbi.item_id ORDER BY sbi.bundle_item_id,sbi.item_id`).all()]);const byBundle={};for(const x of parts.results||[])(byBundle[x.bundle_item_id]??=[]).push(x);return json({items:(items.results||[]).map(x=>({...x,bundle_items:byBundle[x.id]||[]})),managedClub,teamEntitlements});

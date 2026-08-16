@@ -1,0 +1,180 @@
+EPL – Nutzungsbedingungen / AGB
+§ 1 Geltungsbereich
+
+Diese Nutzungsbedingungen gelten für die Nutzung der Online-Plattform EPL – Elite Pro League, betrieben durch Marco Banter, Behrenstraße 31, 10117 Berlin.
+
+Die EPL ist eine Online-Plattform rund um EA FC Pro Clubs und verbindet einen virtuellen Ligabetrieb mit Spieler- und Vereinsprofilen, Statistiken, Community-Funktionen, sozialen Funktionen, Transfers, Marktwerten, virtueller Währung, digitalen Auszeichnungen und weiteren Funktionen.
+
+§ 2 Benutzerkonto
+
+Für die vollständige Nutzung der EPL ist ein Benutzerkonto erforderlich.
+
+Die Anmeldung kann je nach Verfügbarkeit über E-Mail, Google oder Discord erfolgen.
+
+Nutzer sind verpflichtet, ihre Zugangsdaten vor unberechtigtem Zugriff zu schützen und dürfen ihre Konten nicht verkaufen oder ohne Zustimmung der EPL auf andere Personen übertragen.
+
+Die Verwendung mehrerer Benutzerkonten zur Manipulation von Spielen, Statistiken, Abstimmungen, EPL Coins, Marktwerten oder sonstigen Funktionen ist untersagt.
+
+§ 3 Alter
+
+Die reguläre Nutzung der EPL ist ab Vollendung des 16. Lebensjahres möglich.
+
+Nutzer zwischen 13 und 15 Jahren dürfen die EPL nur mit vorheriger Zustimmung eines Erziehungsberechtigten nutzen.
+
+Die EPL kann einen geeigneten Nachweis dieser Zustimmung verlangen.
+
+Personen unter 13 Jahren dürfen kein eigenes EPL-Benutzerkonto erstellen.
+
+Bei zukünftigen entgeltlichen Angeboten können zusätzliche Altersbeschränkungen gelten.
+
+Bei einwilligungsbasierter Datenverarbeitung unterhalb der maßgeblichen Altersgrenze verlangt Art. 8 DSGVO eine elterliche Autorisierung und angemessene Anstrengungen zur Verifikation.
+
+§ 4 Liga- und Wettbewerbsbetrieb
+
+Die EPL kann Ligen, Pokale, Spieltage, Saisonwettbewerbe und sonstige Veranstaltungen organisieren.
+
+Für die Teilnahme gelten zusätzlich die jeweils aktuellen EPL-Ligaregeln.
+
+Spieler, Vereinsmanager und andere berechtigte Personen können abhängig von ihrer Rolle Ergebnisse, Statistiken und weitere Spieldaten eintragen.
+
+Manipulationen oder vorsätzlich falsche Angaben sind verboten.
+
+Die EPL darf nachweislich falsche oder manipulierte Ergebnisse und Statistiken berichtigen.
+
+§ 5 Spielerprofile
+
+Spieler können ein eigenes EPL-Profil führen.
+
+Das Profil kann insbesondere Spielername, Profilbild, Titelbild, Position, Verein, Biografie, Statistiken, Beiträge, Karriereverlauf, Marktwert, Erfolge, Trophäen, Achievements und weitere liga- oder communitybezogene Informationen enthalten.
+
+Je nach Funktion können entsprechende Informationen öffentlich sichtbar sein.
+
+§ 6 Vereine
+
+Vereine können eigene Clubprofile mit Vereinslogo, Titelbild, Kader, Vereinsinformationen, Ergebnissen, Statistiken, Erfolgen, Beiträgen und weiteren Informationen erhalten.
+
+Bestimmte Vereinsfunktionen können auf Vereinsmanager oder andere berechtigte Personen beschränkt werden.
+
+§ 7 Social-Media-Funktionen
+
+Die EPL stellt Community- und Social-Media-Funktionen zur Verfügung.
+
+Hierzu gehören insbesondere Beiträge, Bilder, Kommentare, Antworten, Likes, Follows, Erwähnungen, Benachrichtigungen sowie weitere Interaktionen.
+
+Für alle nutzergenerierten Inhalte gelten die EPL-Community-Richtlinien.
+
+§ 8 Nachrichten und Messenger
+
+Die EPL kann private Nachrichten zwischen Nutzern sowie weitere Chatfunktionen ermöglichen.
+
+Nachrichten sind grundsätzlich nicht öffentlich sichtbar.
+
+Die Inhalte privater Nachrichten dürfen nicht für Spam, Betrug, Belästigung, Bedrohungen oder sonstige rechtswidrige beziehungsweise regelwidrige Aktivitäten verwendet werden.
+
+Wichtig für deine technische Umsetzung: Nach dem bisherigen Aufbau wird dein EPL-Messenger serverseitig in Cloudflare D1 gespeichert. D1 verschlüsselt gespeicherte Daten automatisch „at rest“, das ist aber keine Ende-zu-Ende-Verschlüsselung. Bei E2EE dürfte der Server selbst den Klartext grundsätzlich nicht lesen können. Cloudflare bestätigt lediglich die automatische Verschlüsselung der D1-Datenbank im Ruhezustand.
+
+Ich würde auf deiner Website deshalb nirgendwo „Ende-zu-Ende verschlüsselt“ behaupten.
+
+§ 9 Marktwerte
+
+Die EPL kann Spielern virtuelle EPL-Marktwerte zuweisen.
+
+Der EPL-Marktwert dient ausschließlich zur Darstellung der virtuellen Karriere eines Spielers innerhalb der EPL.
+
+Ein EPL-Marktwert stellt insbesondere keinen realen Geldwert, keinen Kaufpreis, keinen Vermögenswert und keinen Auszahlungsanspruch dar.
+
+Marktwerte können beispielsweise anhand von Leistungen, Statistiken, Liga, Erfolgen und weiteren Kriterien sowie durch hierfür berechtigte Liga-Administratoren verändert werden.
+
+§ 10 Transfers und Verträge
+
+Die EPL kann ein internes Transfer- und Vertragssystem anbieten.
+
+EPL-Verträge dienen ausschließlich der virtuellen Zuordnung von Spielern und Vereinen innerhalb des Ligabetriebs.
+
+Sie stellen grundsätzlich keinen Arbeitsvertrag, keinen Dienstvertrag und keine reale wirtschaftliche Beschäftigung dar.
+
+§ 11 EPL Coins
+
+Die EPL kann eine virtuelle Einheit mit der Bezeichnung EPL Coins verwenden.
+
+EPL Coins sind kein gesetzliches Zahlungsmittel, kein Bankguthaben, keine Kryptowährung und kein Finanzinstrument.
+
+Sie begründen keinen Anspruch auf Auszahlung in Euro, Schweizer Franken oder einer anderen realen Währung.
+
+EPL Coins sind nicht zwischen Nutzern handelbar oder übertragbar.
+
+Eine Auszahlung gegen Echtgeld ist ausgeschlossen.
+
+§ 12 EPL Shop
+
+Die EPL kann einen digitalen Shop bereitstellen.
+
+Dort können beispielsweise Profilbildrahmen, Titelbildrahmen, Namenseffekte, Badges, Bundles und andere virtuelle beziehungsweise kosmetische Inhalte angeboten werden.
+
+Erworbene Cosmetics sind dem jeweiligen EPL-Konto zugeordnet.
+
+Sie können nicht an andere Benutzer verkauft, übertragen oder verschenkt werden, sofern die EPL nicht ausdrücklich eine entsprechende Funktion einführt.
+
+Derzeit werden keine EPL Coins gegen echtes Geld verkauft.
+
+Für eine zukünftige entgeltliche Version gelten zusätzliche Kauf-, Verbraucher- und Widerrufsbedingungen.
+
+§ 13 Achievements, Badges und Trophäen
+
+Spieler und Vereine können digitale Achievements, Badges, Trophäen oder sonstige Auszeichnungen erhalten.
+
+Bei nachgewiesener Manipulation, fehlerhafter Vergabe oder einem später korrigierten Spielergebnis können Auszeichnungen berichtigt oder entfernt werden.
+
+§ 14 Ziele-System
+
+Die EPL kann individuelle oder vereinsbezogene Saisonziele und Herausforderungen anbieten.
+
+Bedingungen, Kosten und mögliche Belohnungen werden jeweils beim entsprechenden Ziel angezeigt.
+
+§ 15 Rechte an hochgeladenen Inhalten
+
+Nutzer behalten grundsätzlich ihre eigenen Rechte an von ihnen erstellten Inhalten.
+
+Mit dem Upload räumt der Nutzer der EPL lediglich die für Betrieb und Darstellung der Plattform notwendigen Nutzungsrechte ein.
+
+Die EPL darf Inhalte beispielsweise speichern, technisch skalieren, komprimieren und innerhalb der Plattform darstellen.
+
+Der Nutzer muss über die erforderlichen Rechte an hochgeladenen Bildern, Logos, Texten und sonstigen Inhalten verfügen.
+
+§ 16 Moderation
+
+Die EPL kann bei Verstößen gegen diese Bedingungen oder die Community-Richtlinien insbesondere Inhalte entfernen, Nutzer verwarnen, einzelne Funktionen einschränken, Accounts vorübergehend sperren oder Accounts bei erheblichen beziehungsweise wiederholten Verstößen dauerhaft sperren.
+
+Art, Schwere, Häufigkeit und Kontext eines Verstoßes sollen bei einer Entscheidung berücksichtigt werden.
+
+Bei DSA-relevanten Moderationsentscheidungen über gehostete Nutzerinhalte sieht Art. 17 grundsätzlich eine klare und konkrete Begründung für die betroffene Person vor.
+
+§ 17 Meldung von Inhalten
+
+Beiträge, Kommentare, Profile und weitere nutzergenerierte Inhalte können über das dafür vorgesehene Meldesystem gemeldet werden.
+
+Meldungen sollen den betroffenen Inhalt und den Grund der Meldung möglichst genau beschreiben.
+
+Für Hostingdienste sieht Art. 16 DSA ein elektronisches Notice-and-Action-Verfahren für Hinweise auf mutmaßlich rechtswidrige Inhalte vor.
+
+§ 18 Verfügbarkeit
+
+Die EPL bemüht sich um eine möglichst störungsfreie Verfügbarkeit.
+
+Eine jederzeit vollständig unterbrechungsfreie Bereitstellung kann jedoch insbesondere wegen Wartungsarbeiten, Sicherheitsmaßnahmen, technischen Störungen oder höherer Gewalt nicht garantiert werden.
+
+Zwingende gesetzliche Ansprüche bleiben unberührt.
+
+§ 19 Änderungen
+
+Funktionen der EPL können weiterentwickelt, verändert oder eingestellt werden.
+
+Bei wesentlichen Änderungen, die bestehende Nutzer erheblich betreffen, werden Nutzer in angemessener Weise informiert.
+
+§ 20 Anwendbares Recht
+
+Es gilt deutsches Recht.
+
+Zwingende Verbraucherschutzvorschriften des Staates, in dem ein Verbraucher seinen gewöhnlichen Aufenthalt hat, bleiben unberührt.
+
+Stand: 16. Juli 2026
