@@ -744,3 +744,13 @@
 
 @media(max-width:1100px){.league-leader-grid{grid-template-columns:1fr}.manager-club-watermark{right:8%;width:220px;height:220px}}
 @media(max-width:760px){.members-only-page{padding:18px 11px 90px}.members-only-card{padding:30px 18px}.members-only-card h1{font-size:31px}.members-only-card .form-actions{display:grid;grid-template-columns:1fr;width:100%}.members-only-card .btn{width:100%}.league-leaders{margin-top:16px}.league-leaders-head h2{font-size:28px}.league-leader-card{padding:10px}.league-leader-row{grid-template-columns:26px 38px minmax(0,1fr) auto}.league-leader-row>img{width:36px;height:36px}.league-leader-row>em{font-size:19px}.manager-club-watermark{width:180px;height:180px;right:-18px;top:42%;opacity:.06}}
+
+
+/* EPL v21.2.1 – icons only on player/team profiles */
+.profile-actions .profile-icon-btn,.club-actions .profile-icon-btn{display:inline-flex;align-items:center;justify-content:center;gap:7px}
+.profile-actions .profile-icon-btn>.ui-svg-icon,.club-actions .profile-icon-btn>.ui-svg-icon{width:15px;height:15px;flex:0 0 15px;color:currentColor}
+.profile-actions .profile-icon-btn>.ui-svg-icon svg,.club-actions .profile-icon-btn>.ui-svg-icon svg{stroke-width:1.8}
+.profile-stat-label{display:inline-flex!important;align-items:center;justify-content:center;gap:4px}
+.profile-stat-label>.ui-svg-icon{width:11px;height:11px;flex:0 0 11px;color:#36b6ff}
+.ref-club-reputation .profile-stat-label>.ui-svg-icon{width:13px;height:13px;flex-basis:13px}
+.ref-profile-statbar .ref-rank>.ui-svg-icon{width:15px;height:15px;color:#35b5ff;vertical-align:middle;margin-right:3px}
