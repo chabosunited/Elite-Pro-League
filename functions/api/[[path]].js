@@ -1842,8 +1842,23 @@ async function getClub(slug,request,env){
   const c=await db.prepare(`SELECT c.*,u.username manager_username,d.name division_name,cd.bio,cd.discord,cd.tiktok,cd.twitch,cd.website
     FROM clubs c LEFT JOIN users u ON u.id=c.manager_user_id LEFT JOIN divisions d ON d.id=c.division_id LEFT JOIN club_details cd ON cd.club_id=c.id WHERE c.slug=?`).bind(slug).first();
   if(!c)return fail('Club nicht gefunden.',404);
-  const likeCount=await db.prepare('SELECT COUNT(*) count FROM club_likes WHERE club_id=?').bind(c.id).first();
-  c.profile_likes=likeCount?.count||0;c.viewer_liked=viewer?!!(await db.prepare('SELECT 1 FROM club_likes WHERE user_id=? AND club_id=?').bind(viewer.id,c.id).first()):false;
+  const [likeCount,followCount,seasonRecord]=await Promise.all([
+    db.prepare('SELECT COUNT(*) count FROM club_likes WHERE club_id=?').bind(c.id).first(),
+    db.prepare('SELECT COUNT(*) count FROM club_follows WHERE club_id=?').bind(c.id).first(),
+    c.division_id?db.prepare(`SELECT COUNT(m.id) played,
+      SUM(CASE WHEN (m.home_club_id=? AND m.home_score>m.away_score) OR (m.away_club_id=? AND m.away_score>m.home_score) THEN 1 ELSE 0 END) wins,
+      SUM(CASE WHEN m.id IS NOT NULL AND m.home_score=m.away_score THEN 1 ELSE 0 END) draws,
+      SUM(CASE WHEN (m.home_club_id=? AND m.home_score<m.away_score) OR (m.away_club_id=? AND m.away_score<m.home_score) THEN 1 ELSE 0 END) losses
+      FROM matches m WHERE m.division_id=? AND m.status='CONFIRMED'`).bind(c.id,c.id,c.id,c.id,c.division_id).first():Promise.resolve({played:0,wins:0,draws:0,losses:0})
+  ]);
+  c.profile_likes=likeCount?.count||0;
+  c.followers_count=followCount?.count||0;
+  c.viewer_liked=viewer?!!(await db.prepare('SELECT 1 FROM club_likes WHERE user_id=? AND club_id=?').bind(viewer.id,c.id).first()):false;
+  c.season_played=Number(seasonRecord?.played||0);
+  c.season_wins=Number(seasonRecord?.wins||0);
+  c.season_draws=Number(seasonRecord?.draws||0);
+  c.season_losses=Number(seasonRecord?.losses||0);
+  c.season_points=c.season_wins*3+c.season_draws;
   const [squad,posts,recentMatches,upcomingMatches,transfers,achievements,topPlayers]=await Promise.all([
     db.prepare(`SELECT u.id,u.username,cm.role,COALESCE(cm.shirt_number,po.shirt_number) shirt_number,p.position,p.overall,p.gender,p.avatar_key,p.country,CASE WHEN p.last_seen_at>=datetime('now','-7 minutes') THEN 1 ELSE 0 END is_online
       FROM club_members cm JOIN users u ON u.id=cm.user_id LEFT JOIN profiles p ON p.user_id=u.id LEFT JOIN profile_onboarding po ON po.user_id=u.id
@@ -1853,9 +1868,9 @@ async function getClub(slug,request,env){
     db.prepare(`SELECT m.id,m.scheduled_at,m.status,h.name home_name,a.name away_name FROM matches m JOIN clubs h ON h.id=m.home_club_id JOIN clubs a ON a.id=m.away_club_id WHERE (m.home_club_id=? OR m.away_club_id=?) AND m.status IN ('SCHEDULED','SUBMITTED') ORDER BY m.scheduled_at ASC LIMIT 6`).bind(c.id,c.id).all(),
     db.prepare(`SELECT t.id,t.type,t.occurred_at,u.username player,fc.name from_club,tc.name to_club FROM transfers t JOIN users u ON u.id=t.user_id LEFT JOIN clubs fc ON fc.id=t.from_club_id LEFT JOIN clubs tc ON tc.id=t.to_club_id WHERE t.from_club_id=? OR t.to_club_id=? ORDER BY t.occurred_at DESC LIMIT 8`).bind(c.id,c.id).all(),
     db.prepare(`SELECT id,title,subtitle,icon_key,awarded_at FROM club_achievements WHERE club_id=? ORDER BY awarded_at DESC LIMIT 8`).bind(c.id).all(),
-    db.prepare(`SELECT u.username,p.position,p.overall,p.gender,p.avatar_key,COALESCE(SUM(ps.goals),0) goals,COALESCE(ROUND(AVG(ps.rating),2),0) rating
+    db.prepare(`SELECT u.username,p.position,p.overall,p.gender,p.avatar_key,COALESCE(SUM(ps.goals),0) goals,COALESCE(SUM(ps.assists),0) assists,COALESCE(SUM(ps.saves),0) saves,COALESCE(SUM(ps.clean_sheet),0) clean_sheets,COALESCE(ROUND(AVG(ps.rating),2),0) rating
       FROM club_members cm JOIN users u ON u.id=cm.user_id LEFT JOIN profiles p ON p.user_id=u.id LEFT JOIN player_stats ps ON ps.user_id=u.id AND ps.club_id=?
-      WHERE cm.club_id=? AND cm.left_at IS NULL GROUP BY u.id ORDER BY goals DESC,rating DESC LIMIT 5`).bind(c.id,c.id).all()
+      WHERE cm.club_id=? AND cm.left_at IS NULL GROUP BY u.id ORDER BY goals DESC,assists DESC,clean_sheets DESC,rating DESC LIMIT 5`).bind(c.id,c.id).all()
   ]);
   return json({club:c,squad:squad.results||[],posts:posts.results||[],recentMatches:recentMatches.results||[],upcomingMatches:upcomingMatches.results||[],transfers:transfers.results||[],achievements:achievements.results||[],topPlayers:topPlayers.results||[]});
 }
