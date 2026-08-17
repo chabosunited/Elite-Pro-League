@@ -71,6 +71,7 @@ export async function onRequest(context){
     if(route.startsWith('profile/') && method === 'GET') return getProfile(route.slice(8),request,env);
     if(route.startsWith('club/') && method === 'GET') return getClub(route.slice(5),request,env);
     if(route === 'standings' && method === 'GET') return getStandings(request,env);
+    if(route === 'statistics/leaders' && method === 'GET') return getLeagueLeaders(request,env);
     if(route === 'fixtures' && method === 'GET') return getFixtures(env);
     if(route === 'wallet' && method === 'GET') return getWallet(request,env);
     if(route === 'ea/club-info' && method === 'GET') return eaClubInfo(request,env);
@@ -1885,6 +1886,21 @@ async function getStandings(request,env){
     WHERE (? IS NULL OR mem.division_id=?) ORDER BY d.level,points DESC,(gf-ga) DESC,gf DESC,c.name`;
   const r=await db.prepare(sql).bind(season.id,season.id,season.id,requestedDivision,requestedDivision).all();
   return json({season:{id:season.id,name:season.name,status:season.status},divisions,standings:r.results||[]});
+}
+async function getLeagueLeaders(request,env){
+  const db=requireDb(env),url=new URL(request.url),divisionId=asId(url.searchParams.get('divisionId'));
+  const season=await db.prepare(`SELECT * FROM seasons ORDER BY CASE status WHEN 'ACTIVE' THEN 0 WHEN 'REGISTRATION' THEN 1 WHEN 'DRAFT' THEN 2 ELSE 3 END,id DESC LIMIT 1`).first();
+  if(!season)return json({season:null,divisionId:divisionId||null,scorers:[],assists:[],keepers:[]});
+  const bindArgs=divisionId?[season.id,divisionId]:[season.id];
+  const divisionWhere=divisionId?' AND m.division_id=?':'';
+  const baseSelect=`SELECT u.id,u.username,lower(u.username) slug,p.position,p.avatar_key,p.gender,c.name club_name,d.name division_name,COUNT(DISTINCT ps.match_id) matches`;
+  const baseFrom=` FROM player_stats ps JOIN matches m ON m.id=ps.match_id JOIN users u ON u.id=ps.user_id LEFT JOIN profiles p ON p.user_id=u.id LEFT JOIN clubs c ON c.id=ps.club_id LEFT JOIN divisions d ON d.id=m.division_id WHERE m.status='CONFIRMED' AND m.season_id=?${divisionWhere}`;
+  const [scorers,assists,keepers]=await Promise.all([
+    db.prepare(`${baseSelect},COALESCE(SUM(ps.goals),0) value ${baseFrom} GROUP BY u.id HAVING value>0 ORDER BY value DESC,matches ASC,u.username COLLATE NOCASE LIMIT 15`).bind(...bindArgs).all(),
+    db.prepare(`${baseSelect},COALESCE(SUM(ps.assists),0) value ${baseFrom} GROUP BY u.id HAVING value>0 ORDER BY value DESC,matches ASC,u.username COLLATE NOCASE LIMIT 15`).bind(...bindArgs).all(),
+    db.prepare(`${baseSelect},COALESCE(SUM(ps.clean_sheet),0) value,COALESCE(SUM(ps.saves),0) saves ${baseFrom} AND (p.position='TW' OR ps.saves>0) GROUP BY u.id HAVING value>0 OR saves>0 ORDER BY value DESC,saves DESC,matches ASC,u.username COLLATE NOCASE LIMIT 15`).bind(...bindArgs).all()
+  ]);
+  return json({season:{id:season.id,name:season.name,status:season.status},divisionId:divisionId||null,scorers:scorers.results||[],assists:assists.results||[],keepers:keepers.results||[]});
 }
 async function getFixtures(env){const db=requireDb(env);const r=await db.prepare(`SELECT m.*,h.name home_name,h.slug home_slug,a.name away_name,a.slug away_slug,d.name division_name FROM matches m JOIN clubs h ON h.id=m.home_club_id JOIN clubs a ON a.id=m.away_club_id JOIN divisions d ON d.id=m.division_id ORDER BY CASE WHEN scheduled_at='' THEN 1 ELSE 0 END,scheduled_at ASC,matchday ASC LIMIT 100`).all();return json({fixtures:r.results})}
 
