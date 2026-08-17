@@ -871,45 +871,119 @@
   .nav-link{padding-left:9px!important;padding-right:9px!important;font-size:13px!important}
 }
 
+
 /* =========================================================
-   EPL v24 — restore pre-v21 mobile width on social/profile pages
+   EPL v26 — restore WIDE mobile layouts + VM Control Center
    ========================================================= */
 @media(max-width:760px){
-  /* Messenger was intentionally edge-to-edge before the global v21 mobile gutter. */
+  /* These three areas intentionally break out of the global v21
+     centered mobile gutter and return to the wide pre-v21 layout. */
   .container.messenger-page{
     width:100%!important;
-    max-width:100%!important;
+    max-width:none!important;
     margin-left:0!important;
     margin-right:0!important;
     padding-left:0!important;
     padding-right:0!important;
   }
+  .messenger-shell{
+    width:100%!important;
+    max-width:none!important;
+    border-left:0!important;
+    border-right:0!important;
+    border-radius:0!important;
+  }
 
-  /* Player profile body was full-width before v21; keep its original
-     dedicated inner paddings instead of the global 15px page gutter. */
   .container.ref-profile-wrap{
+    width:100%!important;
+    max-width:none!important;
+    margin-left:0!important;
+    margin-right:0!important;
+    padding-left:0!important;
+    padding-right:0!important;
+  }
+  .ref-player-hero{
+    width:100%!important;
+    max-width:none!important;
+    margin-left:0!important;
+    margin-right:0!important;
+    border-left:0!important;
+    border-right:0!important;
+    border-radius:0!important;
+  }
+  .container.ref-player-hero-inner{
     width:100%!important;
     max-width:100%!important;
     margin-left:0!important;
     margin-right:0!important;
-    padding-left:0!important;
-    padding-right:0!important;
-  }
-  .container.ref-player-hero-inner{
-    width:calc(100% - 22px)!important;
-    max-width:calc(100% - 22px)!important;
-    margin-left:auto!important;
-    margin-right:auto!important;
+    padding-left:11px!important;
+    padding-right:11px!important;
   }
 
-  /* Club profiles return to the former ~11px mobile outer gutter. */
-  .container.ref-club-hero-inner,
   .container.ref-club-wrap{
-    width:calc(100% - 22px)!important;
-    max-width:calc(100% - 22px)!important;
-    margin-left:auto!important;
-    margin-right:auto!important;
-    padding-left:0!important;
-    padding-right:0!important;
+    width:100%!important;
+    max-width:none!important;
+    margin-left:0!important;
+    margin-right:0!important;
+    padding-left:10px!important;
+    padding-right:10px!important;
   }
+  .ref-club-hero{
+    width:100%!important;
+    max-width:none!important;
+    margin-left:0!important;
+    margin-right:0!important;
+    border-left:0!important;
+    border-right:0!important;
+    border-radius:0!important;
+  }
+  .container.ref-club-hero-inner{
+    width:100%!important;
+    max-width:100%!important;
+    margin-left:0!important;
+    margin-right:0!important;
+    padding-left:11px!important;
+    padding-right:11px!important;
+  }
+
+  /* VM Control Center — fix only the pieces that overflow on phones. */
+  .manager-v6{width:100%!important;min-width:0!important;overflow-x:hidden!important}
+  .manager-metrics{
+    display:grid!important;
+    grid-template-columns:repeat(2,minmax(0,1fr))!important;
+    gap:9px!important;
+    width:100%!important;
+    min-width:0!important;
+  }
+  .manager-metric{
+    min-width:0!important;
+    min-height:84px!important;
+    padding:13px 12px!important;
+    overflow:hidden!important;
+  }
+  .manager-metric span{font-size:8px!important;line-height:1.25!important;overflow-wrap:anywhere!important}
+  .manager-metric strong{font-size:27px!important;line-height:1.05!important}
+  .manager-metric small{font-size:7px!important}
+
+  .manager-tabs{
+    display:grid!important;
+    grid-template-columns:repeat(2,minmax(0,1fr))!important;
+    gap:6px!important;
+    width:100%!important;
+    overflow:visible!important;
+    padding:7px!important;
+  }
+  .manager-tabs button{
+    width:100%!important;
+    min-width:0!important;
+    min-height:42px!important;
+    padding:8px 6px!important;
+    font-size:8.5px!important;
+    line-height:1.2!important;
+    white-space:normal!important;
+    text-align:center!important;
+  }
+  .manager-tabs button.active:after{left:12px!important;right:12px!important}
+  .manager-overview-grid{grid-template-columns:1fr!important}
+  .manager-table-card{max-width:100%!important;overflow-x:auto!important}
 }
