@@ -870,3 +870,46 @@
   .nav{min-width:0!important}
   .nav-link{padding-left:9px!important;padding-right:9px!important;font-size:13px!important}
 }
+
+/* =========================================================
+   EPL v24 — restore pre-v21 mobile width on social/profile pages
+   ========================================================= */
+@media(max-width:760px){
+  /* Messenger was intentionally edge-to-edge before the global v21 mobile gutter. */
+  .container.messenger-page{
+    width:100%!important;
+    max-width:100%!important;
+    margin-left:0!important;
+    margin-right:0!important;
+    padding-left:0!important;
+    padding-right:0!important;
+  }
+
+  /* Player profile body was full-width before v21; keep its original
+     dedicated inner paddings instead of the global 15px page gutter. */
+  .container.ref-profile-wrap{
+    width:100%!important;
+    max-width:100%!important;
+    margin-left:0!important;
+    margin-right:0!important;
+    padding-left:0!important;
+    padding-right:0!important;
+  }
+  .container.ref-player-hero-inner{
+    width:calc(100% - 22px)!important;
+    max-width:calc(100% - 22px)!important;
+    margin-left:auto!important;
+    margin-right:auto!important;
+  }
+
+  /* Club profiles return to the former ~11px mobile outer gutter. */
+  .container.ref-club-hero-inner,
+  .container.ref-club-wrap{
+    width:calc(100% - 22px)!important;
+    max-width:calc(100% - 22px)!important;
+    margin-left:auto!important;
+    margin-right:auto!important;
+    padding-left:0!important;
+    padding-right:0!important;
+  }
+}
