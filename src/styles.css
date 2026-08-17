@@ -752,3 +752,84 @@
   .member-gate-page{padding-top:30px!important;padding-bottom:30px!important}.member-gate{padding:28px 18px!important;border-radius:14px!important}.member-gate h1{font-size:31px!important}.member-gate p{font-size:12px!important}.member-gate-actions{display:grid!important;grid-template-columns:1fr!important}.member-gate-actions .btn{width:100%!important}
   .mobile-drawer.open{left:15px!important;right:15px!important}
 }
+
+/* =========================================================
+   EPL v22 — full-width desktop shell + Control Center polish
+   ========================================================= */
+
+/* The v21 zoom enlarged the UI but also reduced the shell width, which
+   caused header, hero slider and footer to stop before the right edge. */
+@media(min-width:1101px){
+  body{overflow-x:hidden!important}
+  .shell{zoom:1!important;width:100%!important;max-width:none!important;min-height:100vh!important}
+  .site-header,.home-hero,.site-footer{width:100%!important;max-width:none!important}
+  .container{width:min(1600px,calc(100% - 32px))!important;margin-left:auto!important;margin-right:auto!important}
+
+  /* Keep the desktop UI visually large without zooming the whole document. */
+  .site-header{height:96px!important}
+  .header-inner{gap:30px!important}
+  .brand{width:280px!important}.brand img{width:270px!important;height:82px!important}
+  .nav{gap:5px!important}.nav-link{font-size:16px!important;padding:0 17px!important}
+  .header-actions{gap:12px!important}.login-link{font-size:13px!important}
+  .btn{font-size:15px!important;padding:13px 20px!important}
+  .btn-small{font-size:12px!important;padding:9px 13px!important}
+
+  .home-hero{height:430px!important}
+  .home-hero .container{height:100%!important}
+  .hero-content{padding-top:60px!important;width:62%!important}
+  .hero-title{font-size:62px!important;max-width:800px!important;line-height:1.01!important}
+  .hero-copy{font-size:18px!important;max-width:780px!important;line-height:1.5!important}
+  .eyebrow{font-size:19px!important}
+  .slider-arrow{width:46px!important;height:46px!important;font-size:28px!important}
+  .welcome-box,.register-callout{min-height:200px!important;padding:24px 27px!important}
+  .welcome-copy h2{font-size:31px!important}.welcome-copy p,.register-callout p{font-size:14px!important}
+  .home-card{height:330px!important;padding:16px 17px!important}
+  .page-heading h1{font-size:50px!important}.page-heading p{font-size:15px!important}
+
+  .site-footer{min-height:78px!important;margin-top:auto!important}
+  .footer-inner{min-height:78px!important;width:min(1600px,calc(100% - 32px))!important;margin:0 auto!important}
+  .footer-brand{font-size:11px!important}.footer-brand strong{font-size:31px!important}
+  .footer-links,.socials{font-size:11px!important}
+}
+
+/* Club Control Center */
+.manager-v6{gap:16px}
+.manager-hero{isolation:isolate;border-color:#275176;background:linear-gradient(118deg,#06111f 0%,#08213c 48%,#06111c 100%);box-shadow:inset 0 0 55px rgba(0,115,255,.07),0 12px 32px rgba(0,0,0,.18)}
+.manager-hero:before{content:"";position:absolute;inset:0;border-top:2px solid rgba(36,170,255,.55);background:linear-gradient(90deg,rgba(0,146,255,.08),transparent 45%);pointer-events:none;z-index:0}
+.manager-hero-glow{inset:-45% 25% -50% -15%;opacity:.9}
+.manager-hero-watermark{position:absolute;z-index:0;right:255px;top:50%;width:300px;height:300px;transform:translateY(-50%);object-fit:contain;opacity:.085;filter:saturate(.75) drop-shadow(0 0 28px rgba(30,147,255,.2));pointer-events:none;user-select:none}
+.manager-hero-copy,.manager-wallet-card{z-index:2}
+.manager-hero-copy .eyebrow{letter-spacing:.045em}
+.manager-hero-copy h1{font-size:46px;text-shadow:0 0 24px rgba(0,145,255,.13)}
+.manager-hero-copy p{font-size:12px;line-height:1.55}
+.manager-wallet-card{border-color:#326184;background:linear-gradient(180deg,rgba(7,36,61,.96),rgba(4,17,31,.96));box-shadow:inset 0 0 34px rgba(0,123,255,.1),0 8px 24px rgba(0,0,0,.2)}
+.manager-metrics{grid-template-columns:repeat(4,minmax(0,1fr));gap:11px}
+.manager-metric{min-height:88px;padding:15px 17px;transition:border-color .18s,transform .18s,background .18s}
+.manager-metric:hover{transform:translateY(-1px);border-color:#315a7d;background:linear-gradient(180deg,#091827,#06101d)}
+.manager-metric strong{font-size:30px}.manager-metric small{font-size:8px;color:#71879d;margin-top:2px}
+.manager-tabs{position:sticky;top:108px;z-index:24;gap:5px;padding:7px;background:rgba(5,15,27,.96);backdrop-filter:blur(14px);border-color:#29445f;box-shadow:0 8px 24px rgba(0,0,0,.2)}
+.manager-tabs button{cursor:pointer;position:relative;font-size:11px;padding:12px 16px;border:1px solid transparent;transition:.18s}
+.manager-tabs button:hover{border-color:#244d70;background:#092039;color:#69caff}
+.manager-tabs button.active{border-color:#176aa9;background:linear-gradient(180deg,#0a3155,#08213b);color:#42bcff;box-shadow:inset 0 0 22px rgba(0,133,255,.08)}
+.manager-tabs button.active:after{content:"";position:absolute;left:14px;right:14px;bottom:4px;height:2px;border-radius:2px;background:#1ea8ff;box-shadow:0 0 10px rgba(30,168,255,.65)}
+.manager-tab-section{scroll-margin-top:172px}
+.manager-tab-section[hidden]{display:none!important}
+.manager-overview-grid{gap:13px}
+.manager-feature-card{position:relative;overflow:hidden;border-color:#27415b;background:linear-gradient(145deg,#081522,#050d18);transition:transform .18s,border-color .18s,box-shadow .18s}
+.manager-feature-card:before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:linear-gradient(180deg,#16a4ff,transparent 80%);opacity:.65}
+.manager-feature-card:hover{transform:translateY(-2px);border-color:#2d6795;box-shadow:0 12px 30px rgba(0,0,0,.2)}
+.manager-feature-icon{display:grid;width:45px;height:45px;place-items:center;border-radius:11px;background:#092039;border:1px solid #25547a;font-size:24px}
+.manager-feature-card h3{font-size:24px}.manager-feature-card p{font-size:11px;line-height:1.6}
+.manager-section-copy{padding:8px 2px 2px}.manager-section-copy h2{font-size:31px}.manager-section-copy p{font-size:11px;line-height:1.55}
+.manager-table-card{border-color:#27445e}
+
+@media(max-width:1100px){
+  .manager-hero-watermark{right:20px;width:240px;height:240px;opacity:.06}
+  .manager-tabs{top:72px}
+}
+@media(max-width:760px){
+  .manager-hero{padding:20px!important}.manager-hero-watermark{right:-30px;top:42%;width:220px;height:220px;opacity:.055}
+  .manager-tabs{top:66px!important;margin-left:0!important;margin-right:0!important;border-radius:10px!important;padding:6px!important}
+  .manager-tabs button{font-size:9px;padding:10px 11px}
+  .manager-tab-section{scroll-margin-top:126px}
+}
