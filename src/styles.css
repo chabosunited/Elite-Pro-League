@@ -833,3 +833,40 @@
   .manager-tabs button{font-size:9px;padding:10px 11px}
   .manager-tab-section{scroll-margin-top:126px}
 }
+
+/* =========================================================
+   EPL v23 — desktop header group spacing
+   ========================================================= */
+@media(min-width:1500px){
+  .site-header .container.header-inner{
+    width:min(1740px,calc(100% - 56px))!important;
+    max-width:1740px!important;
+    display:grid!important;
+    grid-template-columns:310px minmax(650px,1fr) auto!important;
+    column-gap:42px!important;
+    align-items:center!important;
+  }
+  .brand{width:310px!important;justify-self:start!important}
+  .brand img{width:282px!important;height:82px!important}
+  .nav{width:100%!important;justify-content:center!important;gap:8px!important;min-width:0!important}
+  .nav-link{font-size:15px!important;padding-left:14px!important;padding-right:14px!important}
+  .header-actions{justify-self:end!important;display:flex!important;align-items:center!important;gap:0!important;min-width:max-content!important}
+  .header-control-group{display:flex;align-items:center;gap:18px;padding-right:24px;margin-right:22px;border-right:1px solid #1c344c}
+  .header-utility-group{display:flex;align-items:center;gap:14px}
+  .header-control-group .control-link{font-size:11px!important;margin:0!important;letter-spacing:.025em}
+  .header-utility-group .header-icon-action{width:40px!important;height:44px!important}
+  .header-utility-group .header-profile-action{width:84px!important;margin-left:3px!important}
+  .header-utility-group .logout-compact{margin-left:9px!important;min-width:116px!important}
+  .guest-header-actions{gap:18px!important}
+}
+
+/* Keep the same grouping on regular desktop widths without creating overflow. */
+@media(min-width:1101px) and (max-width:1499px){
+  .site-header .container.header-inner{display:grid!important;grid-template-columns:250px minmax(520px,1fr) auto!important;column-gap:22px!important}
+  .header-actions{display:flex!important;align-items:center!important;gap:0!important;justify-self:end!important;min-width:max-content!important}
+  .header-control-group{display:flex;align-items:center;gap:10px;padding-right:13px;margin-right:12px;border-right:1px solid #1c344c}
+  .header-utility-group{display:flex;align-items:center;gap:7px}
+  .header-utility-group .logout-compact{margin-left:5px!important}
+  .nav{min-width:0!important}
+  .nav-link{padding-left:9px!important;padding-right:9px!important;font-size:13px!important}
+}
