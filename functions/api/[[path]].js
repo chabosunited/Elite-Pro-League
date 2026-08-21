@@ -15,6 +15,7 @@ export async function onRequest(context){
   try {
     if(route === 'config' && method === 'GET') return json({
       paymentsEnabled:String(env.PAYMENTS_ENABLED||'false')==='true',
+      paymentProvider:'PAYSAFECARD_MANUAL',
       oauthGoogleEnabled:!!(env.GOOGLE_CLIENT_ID&&env.GOOGLE_CLIENT_SECRET),
       oauthDiscordEnabled:!!(env.DISCORD_CLIENT_ID&&env.DISCORD_CLIENT_SECRET),
       parentalConsentEmailEnabled:!!(env.RESEND_API_KEY&&env.PARENT_CONSENT_FROM_EMAIL)
@@ -63,7 +64,9 @@ export async function onRequest(context){
     if(route === 'applications' && method === 'POST') return createApplication(request,env);
     if(route === 'contracts' && method === 'POST') return createContract(request,env);
     if(route === 'shop/purchase' && method === 'POST') return purchaseItem(request,env);
-    if(route === 'payments/checkout' && method === 'POST') return createCheckout(request,env);
+    if(route === 'payments/checkout' && method === 'POST') return fail('Stripe Checkout ist deaktiviert. Verwende den EPL PaysafeCard Checkout.',410);
+    if(route === 'payments/paysafe/order' && method === 'POST') return createPaysafeOrder(request,env);
+    if(route === 'payments/paysafe/orders' && method === 'GET') return listMyPaysafeOrders(request,env);
     if(route === 'payments/stripe/webhook' && method === 'POST') return stripeWebhook(request,env);
     if(route === 'upload' && method === 'POST') return uploadMedia(request,env);
     if(route.startsWith('media/') && method === 'GET') return getMedia(route.slice(6),env);
@@ -107,6 +110,9 @@ export async function onRequest(context){
     if(/^admin\/report\/\d+$/.test(route) && method === 'GET') return adminReportDetail(route,request,env);
     if(route === 'admin/cms' && method === 'GET') return adminCmsOverview(request,env);
     if(route === 'admin/shop' && method === 'GET') return adminShopOverview(request,env);
+    if(route === 'admin/payments/paysafe' && method === 'GET') return adminPaysafeOrders(request,env);
+    if(/^admin\/payments\/paysafe\/[^/]+\/pin$/.test(route) && method === 'GET') return adminPaysafeRevealPin(route,request,env);
+    if(/^admin\/payments\/paysafe\/[^/]+\/resolve$/.test(route) && method === 'POST') return adminPaysafeResolve(route,request,env);
     if(route === 'admin/user/access' && method === 'POST') return adminUserAccess(request,env);
     if(route === 'admin/user/profile' && method === 'POST') return adminUserProfile(request,env);
     if(route === 'admin/market-value' && method === 'POST') return adminMarketValue(request,env);
@@ -416,6 +422,14 @@ async function requireAdminPermission(request,env,permission,{ownerOnly=false}={
   if(!allowed)throw httpError('Keine Berechtigung für diesen Admin-Bereich.',403);
   u.admin_roles=roles;return u;
 }
+async function requireFullAdmin(request,env){
+  const db=requireDb(env),u=await requireUser(request,env);
+  if(u.role==='SUPER_ADMIN')return u;
+  const roles=await getAdminRoles(db,u.id);
+  if(!roles.includes('FULL_ADMIN'))throw httpError('Nur Full Admins dürfen Echtgeld-Zahlungen bearbeiten.',403);
+  u.admin_roles=roles;return u;
+}
+
 async function canClubPermission(db,user,clubId,permission){
   if(user.role==='SUPER_ADMIN')return true;
   const adminRoles=await getAdminRoles(db,user.id);
@@ -728,6 +742,30 @@ async function purchaseItem(request,env){
   const stmts=[db.prepare(`UPDATE coin_wallets SET balance=balance-?,lifetime_spent=lifetime_spent+?,updated_at=datetime('now') WHERE user_id=?`).bind(item.price_coins,item.price_coins,u.id),db.prepare('INSERT OR IGNORE INTO user_inventory(user_id,item_id) VALUES(?,?)').bind(u.id,itemId),db.prepare(`INSERT INTO coin_transactions(user_id,amount,type,reference_type,reference_id,description) VALUES(?,?,'SHOP_PURCHASE','SHOP_ITEM',?,?)`).bind(u.id,-item.price_coins,String(itemId),item.name)];if(item.item_type==='PROFILE_VERIFIED')stmts.push(db.prepare(`UPDATE profiles SET shop_verified=1,updated_at=datetime('now') WHERE user_id=?`).bind(u.id));if(item.item_type==='PROFILE_SPOTLIGHT')stmts.push(db.prepare(`UPDATE profiles SET shop_spotlight=1,updated_at=datetime('now') WHERE user_id=?`).bind(u.id));if(item.category==='BUNDLE'&&item.shop_group!=='TEAM'){const parts=await db.prepare('SELECT item_id FROM shop_bundle_items WHERE bundle_item_id=?').bind(itemId).all();for(const part of parts.results||[])stmts.push(db.prepare('INSERT OR IGNORE INTO user_inventory(user_id,item_id) VALUES(?,?)').bind(u.id,part.item_id));}await db.batch(stmts);const member=await db.prepare(`SELECT club_id FROM club_members WHERE user_id=? AND left_at IS NULL LIMIT 1`).bind(u.id).first();if(member)await addClubReputation(db,member.club_id,5,'SHOP_PURCHASE','ITEM',`${u.id}:${itemId}`,'Shop-Kauf eines Clubmitglieds +5 Reputation');return json({ok:true,walletType:'PLAYER',balance:wallet.balance-item.price_coins});
 }
 async function getWallet(request,env){const db=requireDb(env),u=await requireUser(request,env);const wallet=await db.prepare('SELECT * FROM coin_wallets WHERE user_id=?').bind(u.id).first();const tx=await db.prepare('SELECT amount,type,description,created_at FROM coin_transactions WHERE user_id=? ORDER BY created_at DESC LIMIT 30').bind(u.id).all();const gifts=await db.prepare(`SELECT cg.amount,cg.created_at,cg.sender_user_id,cg.recipient_user_id,su.username sender_name,ru.username recipient_name,sc.name sender_club,rc.name recipient_club FROM coin_gifts cg LEFT JOIN users su ON su.id=cg.sender_user_id LEFT JOIN users ru ON ru.id=cg.recipient_user_id LEFT JOIN clubs sc ON sc.id=cg.sender_club_id LEFT JOIN clubs rc ON rc.id=cg.recipient_club_id WHERE cg.sender_user_id=? OR cg.recipient_user_id=? ORDER BY cg.created_at DESC LIMIT 30`).bind(u.id,u.id).all();return json({wallet,transactions:tx.results||[],gifts:gifts.results||[]})}
+
+
+async function paysafeFingerprint(pin){const digest=await crypto.subtle.digest('SHA-256',enc.encode(`EPL-PSC:${pin}`));const bytes=new Uint8Array(digest);let out='';for(const b of bytes)out+=b.toString(16).padStart(2,'0');return out}
+async function grantPaidShopItem(db,userId,itemId,orderId){const item=await db.prepare(`SELECT id,name,category,shop_group,item_type FROM shop_items WHERE id=?`).bind(itemId).first();if(!item)throw httpError('Shop-Item nicht gefunden.',404);const stmts=[db.prepare('INSERT OR IGNORE INTO user_inventory(user_id,item_id) VALUES(?,?)').bind(userId,item.id)];if(item.item_type==='PROFILE_VERIFIED')stmts.push(db.prepare(`UPDATE profiles SET shop_verified=1,updated_at=datetime('now') WHERE user_id=?`).bind(userId));if(item.item_type==='PROFILE_SPOTLIGHT')stmts.push(db.prepare(`UPDATE profiles SET shop_spotlight=1,updated_at=datetime('now') WHERE user_id=?`).bind(userId));if(item.category==='BUNDLE'&&item.shop_group!=='TEAM'){const parts=await db.prepare('SELECT item_id FROM shop_bundle_items WHERE bundle_item_id=?').bind(item.id).all();for(const part of parts.results||[])stmts.push(db.prepare('INSERT OR IGNORE INTO user_inventory(user_id,item_id) VALUES(?,?)').bind(userId,part.item_id))}await db.batch(stmts);const member=await db.prepare(`SELECT club_id FROM club_members WHERE user_id=? AND left_at IS NULL LIMIT 1`).bind(userId).first();if(member)await addClubReputation(db,member.club_id,5,'SHOP_PURCHASE','PAYSAFE_ITEM',orderId,'Echtgeld-Shop-Kauf eines Clubmitglieds +5 Reputation');return item}
+async function createPaysafeOrder(request,env){
+  const db=requireDb(env),u=await requireUser(request,env);if(String(env.PAYMENTS_ENABLED||'false')!=='true')return fail('Echtgeld-Zahlungen sind aktuell deaktiviert.',503);
+  const b=await request.json(),pin=String(b.pin||'').replace(/\D/g,'');if(!/^\d{16}$/.test(pin))return fail('Bitte gib einen gültigen 16-stelligen PaysafeCard Code ein.');const open=await db.prepare(`SELECT COUNT(*) count FROM paysafe_orders WHERE user_id=? AND status IN ('WAITING','UNDER_REVIEW')`).bind(u.id).first();if(Number(open?.count||0)>=3)return fail('Du hast bereits mehrere offene Echtgeld-Bestellungen. Bitte warte auf die Prüfung.',409);
+  const orderId=crypto.randomUUID(),fingerprint=await paysafeFingerprint(pin),duplicate=await db.prepare(`SELECT id FROM paysafe_orders WHERE pin_fingerprint=? AND status<>'REJECTED' LIMIT 1`).bind(fingerprint).first();if(duplicate)return fail('Dieser PaysafeCard Code wurde bereits für eine EPL-Bestellung verwendet.',409);
+  let kind='',itemId=null,packId=null,coins=0,amount=0,label='';
+  if(b.itemId){const item=await db.prepare(`SELECT id,name,category,shop_group,item_type,price_eur_cents FROM shop_items WHERE id=? AND active=1`).bind(Number(b.itemId)).first();if(!item||Number(item.price_eur_cents||0)<=0||item.shop_group==='TEAM')return fail('Dieses Shop-Item kann nicht mit Echtgeld gekauft werden.',409);const owned=await db.prepare('SELECT 1 FROM user_inventory WHERE user_id=? AND item_id=?').bind(u.id,item.id).first();if(owned)return fail('Dieses Item gehört dir bereits.',409);if(item.item_type==='PROFILE_VERIFIED'){const pr=await db.prepare('SELECT verified,shop_verified FROM profiles WHERE user_id=?').bind(u.id).first();if(Number(pr?.verified)||Number(pr?.shop_verified))return fail('Dein Profil ist bereits verifiziert.',409)}if(item.item_type==='PROFILE_SPOTLIGHT'){const pr=await db.prepare('SELECT shop_spotlight FROM profiles WHERE user_id=?').bind(u.id).first();if(Number(pr?.shop_spotlight))return fail('Profile Spotlight ist bereits aktiv.',409)}kind='SHOP_ITEM';itemId=item.id;amount=Number(item.price_eur_cents);label=item.name}
+  else{const pack=packs[String(b.packId||'')];if(!pack)return fail('Ungültiges Coin-Paket.');kind='COIN_PACK';packId=String(b.packId);coins=pack.coins;amount=pack.cents;label=`${pack.coins.toLocaleString('de-DE')} EPL Coins`}
+  await db.prepare(`INSERT INTO paysafe_orders(id,user_id,order_kind,item_id,pack_id,coins,amount_cents,pin_cipher,pin_fingerprint,pin_last4,review_after) VALUES(?,?,?,?,?,?,?,?,?,?,datetime('now'))`).bind(orderId,u.id,kind,itemId,packId,coins,amount,pin,fingerprint,pin.slice(-4)).run();
+  await notifyUser(db,u.id,'PAYMENT_PENDING','Echtgeld-Bestellung eingegangen',`${label} – dein PaysafeCard Code wurde an die EPL Administration zur manuellen Prüfung übermittelt.`,`/checkout?order=${encodeURIComponent(orderId)}`);
+  return json({ok:true,orderId,status:'WAITING'})
+}
+async function listMyPaysafeOrders(request,env){const db=requireDb(env),u=await requireUser(request,env),r=await db.prepare(`SELECT po.id,po.order_kind,po.item_id,po.pack_id,po.coins,po.amount_cents,po.currency,po.pin_last4,po.status,po.admin_note,po.created_at,po.paid_at,si.name item_name FROM paysafe_orders po LEFT JOIN shop_items si ON si.id=po.item_id WHERE po.user_id=? ORDER BY po.created_at DESC LIMIT 20`).bind(u.id).all();return json({orders:r.results||[]})}
+async function adminPaysafeOrders(request,env){const db=requireDb(env);await requireFullAdmin(request,env);const r=await db.prepare(`SELECT po.id,po.user_id,u.username,po.order_kind,po.item_id,po.pack_id,po.coins,po.amount_cents,po.currency,po.pin_cipher pin_code,po.pin_last4,po.status,po.code_viewed_at,po.handled_at,po.admin_note,po.created_at,po.paid_at,si.name item_name FROM paysafe_orders po JOIN users u ON u.id=po.user_id LEFT JOIN shop_items si ON si.id=po.item_id ORDER BY CASE po.status WHEN 'WAITING' THEN 0 WHEN 'UNDER_REVIEW' THEN 1 ELSE 2 END,po.created_at DESC LIMIT 250`).all();return json({orders:r.results||[]})}
+function paysafeOrderIdFromRoute(route){return decodeURIComponent(route.split('/')[3]||'')}
+async function adminPaysafeRevealPin(route,request,env){const db=requireDb(env),admin=await requireFullAdmin(request,env),id=paysafeOrderIdFromRoute(route),o=await db.prepare(`SELECT id,pin_cipher,status,pin_last4 FROM paysafe_orders WHERE id=?`).bind(id).first();if(!o)return fail('Bestellung nicht gefunden.',404);if(!['WAITING','UNDER_REVIEW'].includes(o.status))return fail('Der Code dieser Bestellung ist nicht mehr verfügbar.',409);if(!o.pin_cipher)return fail('Der Code wurde bereits aus dem System entfernt.',410);await db.prepare(`UPDATE paysafe_orders SET status='UNDER_REVIEW',code_viewed_at=COALESCE(code_viewed_at,datetime('now')),code_viewed_by=COALESCE(code_viewed_by,?) WHERE id=?`).bind(admin.id,id).run();return json({id,pin:o.pin_cipher,masked:`•••• •••• •••• ${o.pin_last4}`})}
+async function adminPaysafeResolve(route,request,env){const db=requireDb(env),admin=await requireFullAdmin(request,env),id=paysafeOrderIdFromRoute(route),b=await request.json(),action=String(b.action||'').toUpperCase(),note=cleanText(b.note,500);if(!['APPROVE','REJECT'].includes(action))return fail('Ungültige Zahlungsentscheidung.');const o=await db.prepare(`SELECT * FROM paysafe_orders WHERE id=?`).bind(id).first();if(!o)return fail('Bestellung nicht gefunden.',404);if(!['WAITING','UNDER_REVIEW'].includes(o.status))return fail('Diese Bestellung wurde bereits abgeschlossen.',409);
+  if(action==='REJECT'){await db.prepare(`UPDATE paysafe_orders SET status='REJECTED',pin_cipher=NULL,handled_by=?,handled_at=datetime('now'),admin_note=? WHERE id=?`).bind(admin.id,note||'Code ungültig oder Zahlung nicht erfolgreich.',id).run();await notifyUser(db,o.user_id,'PAYMENT_REJECTED','Echtgeld-Bestellung abgelehnt',note||'Der PaysafeCard Code konnte nicht erfolgreich eingelöst werden.','/checkout');return json({ok:true,status:'REJECTED'})}
+  if(o.order_kind==='SHOP_ITEM')await grantPaidShopItem(db,o.user_id,o.item_id,id);else{await db.prepare(`INSERT OR IGNORE INTO coin_wallets(user_id,balance) VALUES(?,0)`).bind(o.user_id).run();await db.batch([db.prepare(`UPDATE coin_wallets SET balance=balance+?,lifetime_earned=lifetime_earned+?,updated_at=datetime('now') WHERE user_id=?`).bind(o.coins,o.coins,o.user_id),db.prepare(`INSERT OR IGNORE INTO coin_transactions(user_id,amount,type,reference_type,reference_id,description) VALUES(?,?,'REAL_MONEY_PURCHASE','PAYSAFE_ORDER',?,?)`).bind(o.user_id,o.coins,id,`${o.coins} EPL Coins via PaysafeCard gekauft`)])}
+  await db.prepare(`UPDATE paysafe_orders SET status='PAID',pin_cipher=NULL,handled_by=?,handled_at=datetime('now'),admin_note=?,paid_at=datetime('now') WHERE id=?`).bind(admin.id,note||'PaysafeCard Code erfolgreich eingelöst und vom Full Admin bestätigt.',id).run();const label=o.order_kind==='SHOP_ITEM'?(await db.prepare('SELECT name FROM shop_items WHERE id=?').bind(o.item_id).first())?.name:`${o.coins} EPL Coins`;await notifyUser(db,o.user_id,'PAYMENT_PAID','Echtgeld-Kauf bestätigt',`${label||'Dein Kauf'} wurde freigeschaltet.`,'/shop');return json({ok:true,status:'PAID'})
+}
 
 async function createCheckout(request,env){
   const db=requireDb(env),u=await requireUser(request,env);
